@@ -1,4 +1,4 @@
-"""Pytest configuration: load ``.env`` from the repository root for local runs."""
+"""Load `.env` for local test runs."""
 
 from __future__ import annotations
 

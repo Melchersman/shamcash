@@ -32,7 +32,7 @@ def test_balance_row_numeric_strings() -> None:
 
 
 def test_balance_row_invalid_decimal() -> None:
-    with pytest.raises(ProtocolError, match="Invalid decimal"):
+    with pytest.raises(ProtocolError, match="invalid decimal"):
         BalanceRow.from_dict(
             {"currency": {"id": 1, "code": "USD"}, "available": "not-a-number"}
         )

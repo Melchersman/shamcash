@@ -1,6 +1,4 @@
-"""
-Exceptions for the ShamCash HTTP API (envelope ``code`` values) and client protocol errors.
-"""
+"""Exception types for the ShamCash client."""
 
 from __future__ import annotations
 
@@ -8,16 +6,7 @@ from typing import Any, Optional, Type
 
 
 class ShamCashAPIError(Exception):
-    """
-    Base exception for ShamCash client and API errors.
-
-    Attributes:
-        message: Human-readable message.
-        code: Machine code when applicable.
-        data: Server ``data`` field or a small debug payload.
-        http_status: HTTP status from the last response when available.
-        retry_after: Seconds to wait when server sent ``Retry-After`` (e.g. 429).
-    """
+    """Base class for SDK and API errors."""
 
     def __init__(
         self,
@@ -32,7 +21,7 @@ class ShamCashAPIError(Exception):
         self.data = data
         self.http_status = http_status
         self.retry_after = retry_after
-        super().__init__(self.message)
+        super().__init__(message)
 
     def __str__(self) -> str:
         parts: list[str] = []
@@ -43,7 +32,7 @@ class ShamCashAPIError(Exception):
             parts.append(f"(HTTP {self.http_status})")
         if self.retry_after is not None:
             parts.append(f"retry_after={self.retry_after}s")
-        return " ".join(p for p in parts if p)
+        return " ".join(parts)
 
     def __repr__(self) -> str:
         return (
@@ -53,54 +42,51 @@ class ShamCashAPIError(Exception):
 
 
 class ValidationError(ShamCashAPIError):
-    """Malformed or conflicting query parameters (``VALIDATION_ERROR``)."""
+    """`VALIDATION_ERROR`."""
 
 
 class AuthMissingError(ShamCashAPIError):
-    """Missing ``Authorization`` header or empty bearer token (``AUTH_MISSING``)."""
+    """`AUTH_MISSING`."""
 
 
 class AuthInvalidError(ShamCashAPIError):
-    """Token is invalid, unknown, expired, or revoked (``AUTH_INVALID``)."""
+    """`AUTH_INVALID`."""
 
 
 class ForbiddenError(ShamCashAPIError):
-    """Token is valid but not allowed to perform the action (``FORBIDDEN``)."""
+    """`FORBIDDEN`."""
 
 
 class NotFoundError(ShamCashAPIError):
-    """Generic not found (``NOT_FOUND``)."""
+    """`NOT_FOUND`."""
 
 
 class AccountNotFoundError(ShamCashAPIError):
-    """Linked account does not exist or does not belong to the user (``ACCOUNT_NOT_FOUND``)."""
+    """`ACCOUNT_NOT_FOUND`."""
 
 
 class SubscriptionUnavailableError(ShamCashAPIError):
-    """Account inactive, missing subscription, or subscription ended (``SUBSCRIPTION_UNAVAILABLE``)."""
+    """`SUBSCRIPTION_UNAVAILABLE`."""
 
 
 class RateLimitExceededError(ShamCashAPIError):
-    """Too many requests for the current rate limit window (``RATE_LIMIT_EXCEEDED``)."""
+    """`RATE_LIMIT_EXCEEDED`."""
 
 
 class FetchFailedError(ShamCashAPIError):
-    """Upstream or internal data fetch failed (``FETCH_FAILED``)."""
+    """`FETCH_FAILED`."""
 
 
 class InternalError(ShamCashAPIError):
-    """Unexpected server error (``INTERNAL_ERROR``)."""
+    """`INTERNAL_ERROR`."""
 
 
 class NetworkError(ShamCashAPIError):
-    """
-    Transport failure: DNS, connection, TLS, and other :mod:`aiohttp` client errors
-    that are not application-level JSON.
-    """
+    """Network or transport failure."""
 
 
 class RequestTimeoutError(ShamCashAPIError):
-    """Request exceeded the configured time limit (distinct from business errors)."""
+    """Request timeout."""
 
     def __init__(
         self,
@@ -110,14 +96,17 @@ class RequestTimeoutError(ShamCashAPIError):
         http_status: Optional[int] = None,
         retry_after: Optional[int] = None,
     ) -> None:
-        super().__init__(message, code=code, data=data, http_status=http_status, retry_after=retry_after)
+        super().__init__(
+            message,
+            code=code,
+            data=data,
+            http_status=http_status,
+            retry_after=retry_after,
+        )
 
 
 class ProtocolError(ShamCashAPIError):
-    """
-    Response could not be parsed or did not match the expected JSON shape (envelope or documented ``data`` schema).
-    This is a client-side classification; it is not a server business ``code``.
-    """
+    """Invalid JSON or payload shape."""
 
 
 ERROR_MAP: dict[str, Type[ShamCashAPIError]] = {
@@ -135,12 +124,10 @@ ERROR_MAP: dict[str, Type[ShamCashAPIError]] = {
 
 
 def parse_retry_after_header(value: Optional[str]) -> Optional[int]:
-    if value is None or value == "":
+    if not value:
         return None
-    value = value.strip()
-    # Retry-After can be a delay-seconds or an HTTP date; we only parse integer seconds
     try:
-        return int(value)
+        return int(value.strip())
     except ValueError:
         return None
 
@@ -152,21 +139,12 @@ def raise_for_envelope_code(
     http_status: Optional[int] = None,
     retry_after: Optional[int] = None,
 ) -> None:
-    """Raise the appropriate exception for an API ``code`` string."""
-    error_message = message or f"API error: {code}"
     exc_type = ERROR_MAP.get(code, ShamCashAPIError)
-    if exc_type is RateLimitExceededError:
-        raise exc_type(
-            error_message,
-            code=code,
-            data=data,
-            http_status=http_status,
-            retry_after=retry_after,
-        )
+    text = message or code
     raise exc_type(
-        error_message,
+        text,
         code=code,
         data=data,
         http_status=http_status,
-        retry_after=None,
+        retry_after=retry_after if exc_type is RateLimitExceededError else None,
     )

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "shamcash"
-version = "1.1.2"
-description = "Python client for the ShamCash HTTP API (shamcash-api.com)"
+version = "1.1.4"
+description = "Python client for the ShamCash API"
 readme = "README.md"
 requires-python = ">=3.8"
 license = "MIT"
@@ -25,13 +25,13 @@ classifiers = [
     "Topic :: Internet :: WWW/HTTP",
 ]
 keywords = ["shamcash", "payment", "api", "syria", "wallet"]
-dependencies = ["aiohttp>=3.8.0"]
+dependencies = ["httpx>=0.27,<1"]
 
 [project.optional-dependencies]
 dev = [
+    "httpx>=0.27,<1",
     "pytest>=7.4",
     "pytest-asyncio>=0.23",
-    "aioresponses>=0.7.4",
     "python-dotenv>=1.0",
 ]
 
@@ -50,6 +50,3 @@ shamcash = ["py.typed"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-markers = [
-    "integration: calls the live ShamCash API (requires SHAMCASH_API_TOKEN)",
-]
