@@ -1,10 +1,4 @@
-"""
-ShamCash API — Python client for ``https://api.shamcash-api.com/v1``.
-
-Authenticate with a dashboard API token (``Authorization: Bearer``), then list
-linked accounts, read balances, and query incoming transactions (with filters
-and single-transaction lookup).
-"""
+"""Python client for the ShamCash API."""
 
 from .client import ShamCashAPI, ShamCashAPISync
 from .exceptions import (
@@ -33,7 +27,7 @@ from .models import (
     TransactionsResult,
 )
 
-__version__ = "1.1.2"
+__version__ = "1.1.4"
 
 __all__ = [
     "ShamCashAPI",
