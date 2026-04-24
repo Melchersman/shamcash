@@ -3,6 +3,9 @@ Typed models for ShamCash API ``data`` payloads.
 
 Field names follow ``docs/ShamCash-API-Docs.md``. Monetary amounts use :class:`decimal.Decimal`.
 Timestamps are parsed to timezone-aware :class:`datetime.datetime` when possible.
+
+Balance row ``available`` / ``blocked`` and transaction ``amount`` may be omitted or ``null``
+in live responses; those are normalized to ``Decimal('0')``.
 """
 
 from __future__ import annotations
@@ -31,6 +34,39 @@ def _dec_money(value: Any, field: str) -> Decimal:
             code="INVALID_PAYLOAD",
             data={field: value},
         ) from e
+
+
+def _dec_money_balance_amount(value: Any, field: str) -> Decimal:
+    """
+    Parse balance row amounts. The live API may omit keys or send ``null`` when the
+    value is zero; treat those as ``Decimal('0')``. Non-null invalid values still error.
+    """
+    if value is None:
+        return Decimal("0")
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError) as e:
+        raise ProtocolError(
+            f"Invalid decimal for {field}: {value!r}",
+            code="INVALID_PAYLOAD",
+            data={field: value},
+        ) from e
+
+
+def _str_field(d: dict[str, Any], key: str, *, required: bool) -> str:
+    """Normalize optional/required string fields (API may use null or omit keys)."""
+    if key not in d:
+        if required:
+            raise ProtocolError(
+                f"missing required string field {key!r}",
+                code="INVALID_PAYLOAD",
+                data=d,
+            )
+        return ""
+    v = d[key]
+    if v is None:
+        return ""
+    return str(v)
 
 
 def _require_dict(data: Any, what: str) -> dict[str, Any]:
@@ -155,8 +191,8 @@ class BalanceRow:
             )
         return cls(
             currency=Currency.from_dict(cur),
-            available=_dec_money(d.get("available"), "available"),
-            blocked=_dec_money(d.get("blocked"), "blocked"),
+            available=_dec_money_balance_amount(d.get("available"), "available"),
+            blocked=_dec_money_balance_amount(d.get("blocked"), "blocked"),
         )
 
 
@@ -209,17 +245,7 @@ class IncomingTransaction:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> IncomingTransaction:
         d = _require_dict(data, "transaction")
-        required = (
-            "transaction_id",
-            "amount",
-            "currency",
-            "occurred_at",
-            "receiver_name",
-            "sender_name",
-            "sender_address",
-            "note",
-        )
-        for k in required:
+        for k in ("transaction_id", "currency", "occurred_at"):
             if k not in d:
                 raise ProtocolError(
                     f"transaction missing {k!r}",
@@ -237,15 +263,16 @@ class IncomingTransaction:
                 code="INVALID_PAYLOAD",
                 data=d,
             ) from e
+        amount = _dec_money_balance_amount(d.get("amount"), "amount")
         return cls(
             transaction_id=tx_id,
-            amount=_dec_money(d.get("amount"), "amount"),
+            amount=amount,
             currency=Currency.from_dict(cur),
             occurred_at=_require_iso_datetime(d.get("occurred_at"), "occurred_at"),
-            receiver_name=str(d["receiver_name"]),
-            sender_name=str(d["sender_name"]),
-            sender_address=str(d["sender_address"]),
-            note="" if d.get("note") is None else str(d["note"]),
+            receiver_name=_str_field(d, "receiver_name", required=False),
+            sender_name=_str_field(d, "sender_name", required=False),
+            sender_address=_str_field(d, "sender_address", required=False),
+            note=_str_field(d, "note", required=False),
         )
 
 
