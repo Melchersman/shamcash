@@ -92,7 +92,7 @@ Per linked account: **6 requests per minute** for `GET /accounts/{id}`, `GET /ba
 PyPI uploads are automated via GitHub Actions when you push a **semver tag** (`v1.0.1`, `v2.0.0`, …).
 
 1. Bump `version` in `pyproject.toml` and `__version__` in `shamcash/__init__.py` (they must match the tag, without the leading `v`).
-2. Commit and push to `main`.
+2. Commit and push to your default branch (e.g. `master` or `main`).
 3. Create and push the tag: `git tag v1.0.1` then `git push origin v1.0.1`.
 
 The workflow needs a repository secret **`PYPI_API_TOKEN`** (PyPI API token with upload scope). You can also run **Actions → Publish to PyPI → Run workflow** manually after configuring the secret.
