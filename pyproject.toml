@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shamcash"
+version = "1.0.0"
+description = "Python client for the ShamCash HTTP API (shamcash-api.com)"
+readme = "README.md"
+requires-python = ">=3.8"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "melchersman", email = "melchersman@gmail.com" }]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Internet :: WWW/HTTP",
+]
+keywords = ["shamcash", "payment", "api", "syria", "wallet"]
+dependencies = ["aiohttp>=3.8.0"]
+
+[project.urls]
+Homepage = "https://github.com/melchersman/shamcash"
+Documentation = "https://shamcash-api.com"
+Repository = "https://github.com/melchersman/shamcash"
+Issues = "https://github.com/melchersman/shamcash/issues"
+
+[tool.setuptools]
+packages = ["shamcash"]
+
+[tool.setuptools.package-data]
+shamcash = ["py.typed"]
