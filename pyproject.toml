@@ -28,10 +28,10 @@ keywords = ["shamcash", "payment", "api", "syria", "wallet"]
 dependencies = ["aiohttp>=3.8.0"]
 
 [project.urls]
-Homepage = "https://github.com/melchersman/shamcash"
+Homepage = "https://github.com/Melchersman/shamcash"
 Documentation = "https://shamcash-api.com"
-Repository = "https://github.com/melchersman/shamcash"
-Issues = "https://github.com/melchersman/shamcash/issues"
+Repository = "https://github.com/Melchersman/shamcash"
+Issues = "https://github.com/Melchersman/shamcash/issues"
 
 [tool.setuptools]
 packages = ["shamcash"]
