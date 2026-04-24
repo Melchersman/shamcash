@@ -7,6 +7,23 @@ and single-transaction lookup).
 """
 
 from .client import ShamCashAPI, ShamCashAPISync
+from .exceptions import (
+    AccountNotFoundError,
+    AuthInvalidError,
+    AuthMissingError,
+    FetchFailedError,
+    ForbiddenError,
+    InternalError,
+    NetworkError,
+    NotFoundError,
+    ProtocolError,
+    RateLimitExceededError,
+    RequestTimeoutError,
+    ShamCashAPIError,
+    SubscriptionUnavailableError,
+    ValidationError,
+    parse_retry_after_header,
+)
 from .models import (
     Account,
     BalanceRow,
@@ -15,22 +32,8 @@ from .models import (
     IncomingTransaction,
     TransactionsResult,
 )
-from .exceptions import (
-    ShamCashAPIError,
-    ValidationError,
-    AuthMissingError,
-    AuthInvalidError,
-    ForbiddenError,
-    NotFoundError,
-    AccountNotFoundError,
-    SubscriptionUnavailableError,
-    RateLimitExceededError,
-    FetchFailedError,
-    InternalError,
-    NetworkError,
-)
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 __all__ = [
     "ShamCashAPI",
@@ -53,4 +56,7 @@ __all__ = [
     "FetchFailedError",
     "InternalError",
     "NetworkError",
+    "ProtocolError",
+    "RequestTimeoutError",
+    "parse_retry_after_header",
 ]

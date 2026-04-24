@@ -8,11 +8,18 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Dict, List, Optional, Sequence, Union, cast
+from collections.abc import Sequence
+from typing import Any, Dict, List, Optional, Union
 
 import aiohttp
 
-from .exceptions import NetworkError, ShamCashAPIError, raise_for_envelope_code
+from .exceptions import (
+    NetworkError,
+    ProtocolError,
+    RequestTimeoutError,
+    parse_retry_after_header,
+    raise_for_envelope_code,
+)
 from .models import Account, BalancesResult, IncomingTransaction, TransactionsResult
 
 
@@ -25,26 +32,77 @@ def _format_transaction_ids(transaction_ids: Union[int, Sequence[int], str]) -> 
     return ",".join(str(i) for i in transaction_ids)
 
 
+def _retry_after_from_response(response: aiohttp.ClientResponse) -> Optional[int]:
+    return parse_retry_after_header(response.headers.get("Retry-After"))
+
+
+def _parse_json_envelope(
+    text: str,
+    http_status: int,
+) -> dict[str, Any]:
+    if not text.strip():
+        raise ProtocolError(
+            "empty response body",
+            code="INVALID_PAYLOAD",
+            data=None,
+            http_status=http_status,
+        )
+    try:
+        body: Any = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise ProtocolError(
+            f"response is not valid JSON: {e}",
+            code="INVALID_PAYLOAD",
+            data={"body_preview": text[:500]},
+            http_status=http_status,
+        ) from e
+    if not isinstance(body, dict):
+        raise ProtocolError(
+            f"top-level JSON must be an object, got {type(body).__name__}",
+            code="INVALID_PAYLOAD",
+            data=body,
+            http_status=http_status,
+        )
+    return body
+
+
+def _handle_business_envelope(
+    body: dict[str, Any],
+    http_status: int,
+    response: aiohttp.ClientResponse,
+) -> Any:
+    status = body.get("status")
+    code = str(body.get("code", "") or "")
+    message = str(body.get("message", "") or "")
+    data = body.get("data")
+    if status == "success":
+        return data
+    if status == "error":
+        ra = _retry_after_from_response(response) if (code == "RATE_LIMIT_EXCEEDED" or http_status == 429) else None
+        raise_for_envelope_code(
+            code,
+            message,
+            data,
+            http_status=http_status,
+            retry_after=ra,
+        )
+    raise ProtocolError(
+        message or "Unexpected envelope: missing or unknown status",
+        code="INVALID_PAYLOAD",
+        data=body,
+        http_status=http_status,
+    )
+
+
 class ShamCashAPI:
     """
     Async client for ``https://api.shamcash-api.com/v1``.
 
     Every request sends ``Authorization: Bearer <token>``. Responses are parsed as
-    JSON envelopes: ``status``, ``code``, ``message``, ``data``. On error, an
-    exception from :mod:`shamcash.exceptions` is raised; successful calls return
-    typed models from :mod:`shamcash.models`.
-
-    Example::
-
-        import asyncio
-        from shamcash import ShamCashAPI
-
-        async def main():
-            async with ShamCashAPI(api_token="...") as client:
-                accounts = await client.list_accounts()
-                balances = await client.get_balances(accounts[0].id)
-
-        asyncio.run(main())
+    JSON objects with envelope fields. On server ``status: error`` or malformed
+    payloads, an exception is raised. Successful high-level methods return typed
+    models. Use :meth:`fetch_json_envelope` to inspect the raw JSON object without
+    mapping API error codes to exceptions.
     """
 
     def __init__(
@@ -54,13 +112,6 @@ class ShamCashAPI:
         timeout: int = 30,
         session: Optional[aiohttp.ClientSession] = None,
     ) -> None:
-        """
-        Args:
-            api_token: Dashboard API token (Bearer).
-            base_url: API root including ``/v1`` (trailing slash optional).
-            timeout: Total request timeout in seconds.
-            session: Optional shared :class:`aiohttp.ClientSession`.
-        """
         if not api_token or not str(api_token).strip():
             raise ValueError("api_token must be a non-empty string")
         self.api_token = str(api_token).strip()
@@ -75,7 +126,6 @@ class ShamCashAPI:
         return self._session
 
     async def close(self) -> None:
-        """Close the client session if this client owns it."""
         if self._session and not self._session.closed and self._own_session:
             await self._session.close()
 
@@ -85,6 +135,49 @@ class ShamCashAPI:
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         await self.close()
 
+    async def fetch_json_envelope(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Optional[Dict[str, Union[str, int]]] = None,
+    ) -> dict[str, Any]:
+        """
+        Perform one HTTP call and return the **full** parsed JSON object
+        (``status``, ``code``, ``message``, ``data``). Does **not** raise for
+        ``status: "error"``; callers should inspect ``status`` and ``code``.
+
+        Still raises for transport failures, timeouts, and non-envelope JSON
+        (:class:`NetworkError`, :class:`RequestTimeoutError`, :class:`ProtocolError`).
+        """
+        url = f"{self.base_url}/{path.lstrip('/')}"
+        headers: Dict[str, str] = {
+            "Authorization": f"Bearer {self.api_token}",
+            "Accept": "application/json",
+        }
+        try:
+            session = await self._get_session()
+            async with session.request(method, url, headers=headers, params=params) as response:
+                text = await response.text()
+                body = _parse_json_envelope(text, response.status)
+                return body
+        except (asyncio.TimeoutError, TimeoutError) as e:
+            raise RequestTimeoutError(
+                "Request timed out",
+                data={"url": url},
+            ) from e
+        except aiohttp.ServerTimeoutError as e:
+            raise RequestTimeoutError(
+                f"Request timed out: {e}",
+                data={"url": url},
+            ) from e
+        except aiohttp.ClientError as e:
+            raise NetworkError(
+                f"Network request failed: {e}",
+                code="NETWORK_ERROR",
+                data={"url": url},
+            ) from e
+
     async def _request(
         self,
         method: str,
@@ -93,7 +186,7 @@ class ShamCashAPI:
         params: Optional[Dict[str, Union[str, int]]] = None,
     ) -> Any:
         url = f"{self.base_url}/{path.lstrip('/')}"
-        headers = {
+        headers: Dict[str, str] = {
             "Authorization": f"Bearer {self.api_token}",
             "Accept": "application/json",
         }
@@ -101,100 +194,78 @@ class ShamCashAPI:
             session = await self._get_session()
             async with session.request(method, url, headers=headers, params=params) as response:
                 text = await response.text()
-                try:
-                    body: Any = json.loads(text) if text else {}
-                except json.JSONDecodeError:
-                    raise NetworkError(
-                        f"Invalid JSON response (HTTP {response.status})",
-                        code="NETWORK_ERROR",
-                        data={"http_status": response.status, "body_preview": text[:500]},
-                    )
-
-                if not isinstance(body, dict):
-                    raise NetworkError(
-                        "Response JSON was not an object",
-                        code="NETWORK_ERROR",
-                        data={"http_status": response.status},
-                    )
-
-                status = body.get("status")
-                code = str(body.get("code", "") or "")
-                message = str(body.get("message", "") or "")
-                data = body.get("data")
-
-                if status == "success":
-                    return data
-                if status == "error":
-                    raise_for_envelope_code(code, message, data)
-
-                raise ShamCashAPIError(
-                    message or "Unexpected envelope: missing or unknown status",
-                    code=code or "UNKNOWN_ENVELOPE",
-                    data=body,
-                )
+                body = _parse_json_envelope(text, response.status)
+                return _handle_business_envelope(body, response.status, response)
+        except (asyncio.TimeoutError, TimeoutError) as e:
+            raise RequestTimeoutError(
+                "Request timed out",
+                data={"url": url},
+            ) from e
+        except aiohttp.ServerTimeoutError as e:
+            raise RequestTimeoutError(
+                f"Request timed out: {e}",
+                data={"url": url},
+            ) from e
         except aiohttp.ClientError as e:
             raise NetworkError(
                 f"Network request failed: {e}",
                 code="NETWORK_ERROR",
+                data={"url": url},
             ) from e
 
     async def list_accounts(self) -> List[Account]:
         """
         ``GET /accounts`` — all ShamCash accounts linked to the authenticated user.
 
-        Returns:
-            List of :class:`~shamcash.models.Account`.
-
         Raises:
-            AuthMissingError, AuthInvalidError, RateLimitExceededError, FetchFailedError,
-            InternalError, NetworkError, etc., per API ``code``.
+            :class:`ProtocolError` if ``data`` is not a JSON array (per API docs).
         """
         raw = await self._request("GET", "/accounts")
         if raw is None:
-            return []
+            raise ProtocolError(
+                "GET /accounts success payload must be a JSON array, got null",
+                code="INVALID_PAYLOAD",
+                data=raw,
+            )
         if not isinstance(raw, list):
-            return []
-        return [Account.from_dict(cast(Dict[str, Any], item)) for item in raw if isinstance(item, dict)]
+            raise ProtocolError(
+                "GET /accounts success payload must be a JSON array",
+                code="INVALID_PAYLOAD",
+                data=raw,
+            )
+        out: List[Account] = []
+        for i, item in enumerate(raw):
+            if not isinstance(item, dict):
+                raise ProtocolError(
+                    f"accounts[{i}] must be an object",
+                    code="INVALID_PAYLOAD",
+                    data=item,
+                )
+            out.append(Account.from_dict(item))
+        return out
 
     async def get_account(self, account_id: str) -> Account:
-        """
-        ``GET /accounts/{account_id}`` — one linked account by id.
-
-        Args:
-            account_id: Stable linked account id from :meth:`list_accounts`.
-
-        Returns:
-            :class:`~shamcash.models.Account`.
-
-        Raises:
-            AccountNotFoundError: If the account is missing or not linked to this token.
-        """
         if not account_id:
             raise ValueError("account_id must be non-empty")
         raw = await self._request("GET", f"/accounts/{account_id}")
         if not isinstance(raw, dict):
-            raise ShamCashAPIError("Unexpected accounts payload", code="UNKNOWN_ENVELOPE", data=raw)
+            raise ProtocolError(
+                "GET /accounts/{id} data must be a JSON object",
+                code="INVALID_PAYLOAD",
+                data=raw,
+            )
         return Account.from_dict(raw)
 
     async def get_balances(self, account_id: str) -> BalancesResult:
-        """
-        ``GET /balances`` — balance rows for one linked account.
-
-        Args:
-            account_id: Required. Linked account id.
-
-        Returns:
-            :class:`~shamcash.models.BalancesResult` with ``account_id`` and ``balances``.
-
-        Raises:
-            SubscriptionUnavailableError: Inactive link or no active subscription.
-            AccountNotFoundError: Unknown account for this user (if returned by API).
-        """
         if not account_id:
             raise ValueError("account_id must be non-empty")
         raw = await self._request("GET", "/balances", params={"account_id": account_id})
         if not isinstance(raw, dict):
-            raise ShamCashAPIError("Unexpected balances payload", code="UNKNOWN_ENVELOPE", data=raw)
+            raise ProtocolError(
+                "GET /balances data must be a JSON object",
+                code="INVALID_PAYLOAD",
+                data=raw,
+            )
         return BalancesResult.from_dict(raw)
 
     async def list_transactions(
@@ -207,29 +278,6 @@ class ShamCashAPI:
         coin_id: Optional[int] = None,
         limit: Optional[int] = None,
     ) -> TransactionsResult:
-        """
-        ``GET /transactions`` — incoming transactions for one account with optional filters.
-
-        Server-side filter order (per docs): ``account_id`` scope, ``start_at`` /
-        ``end_at``, ``coin_id``, intersection with ``transaction_ids``, then ``limit``.
-
-        Args:
-            account_id: Required linked account id.
-            start_at: Inclusive lower bound (``YYYY-MM-DD`` or datetime; Asia/Damascus
-                if no offset in string).
-            end_at: Inclusive upper bound; same rules as ``start_at``.
-            transaction_ids: Comma-separated numeric ids as a string, a single int,
-                or a sequence of ints. If none match, the API still succeeds with an
-                empty ``transactions`` list.
-            coin_id: Currency filter: ``1`` USD, ``2`` SYP, ``3`` EUR.
-            limit: Max rows (default on server ``20``; server may cap e.g. ``200``).
-
-        Returns:
-            :class:`~shamcash.models.TransactionsResult`.
-
-        Raises:
-            SubscriptionUnavailableError: When the account cannot be used for this operation.
-        """
         if not account_id:
             raise ValueError("account_id must be non-empty")
         params: Dict[str, Union[str, int]] = {"account_id": account_id}
@@ -243,27 +291,18 @@ class ShamCashAPI:
             params["coin_id"] = int(coin_id)
         if limit is not None:
             params["limit"] = int(limit)
-
         raw = await self._request("GET", "/transactions", params=params)
         if not isinstance(raw, dict):
-            raise ShamCashAPIError("Unexpected transactions payload", code="UNKNOWN_ENVELOPE", data=raw)
+            raise ProtocolError(
+                "GET /transactions data must be a JSON object",
+                code="INVALID_PAYLOAD",
+                data=raw,
+            )
         return TransactionsResult.from_dict(raw)
 
-    async def get_transaction(self, account_id: str, transaction_id: int) -> Optional[IncomingTransaction]:
-        """
-        Fetch a single incoming transaction by id using the ``transaction_ids`` filter.
-
-        This maps to ``GET /transactions`` with ``transaction_ids=<id>``. If the id
-        does not exist for that account, the API returns success with an empty list;
-        this method then returns ``None``.
-
-        Args:
-            account_id: Linked account id.
-            transaction_id: Numeric ``transaction_id`` from the API.
-
-        Returns:
-            :class:`~shamcash.models.IncomingTransaction` or ``None`` if not found.
-        """
+    async def get_transaction(
+        self, account_id: str, transaction_id: int
+    ) -> Optional[IncomingTransaction]:
         result = await self.list_transactions(
             account_id,
             transaction_ids=transaction_id,
@@ -273,35 +312,14 @@ class ShamCashAPI:
             return None
         return result.transactions[0]
 
-    @staticmethod
-    def find_transaction_by_id(
-        transactions: Sequence[IncomingTransaction],
-        transaction_id: int,
-    ) -> Optional[IncomingTransaction]:
-        """
-        Return the first transaction in ``transactions`` with the given ``transaction_id``.
-
-        Useful for client-side lookups without an extra API call.
-        """
-        for tx in transactions:
-            if tx.transaction_id == transaction_id:
-                return tx
-        return None
-
 
 class ShamCashAPISync:
     """
-    Synchronous wrapper around :class:`ShamCashAPI`.
+    Synchronous wrapper with a dedicated event loop (created in ``__init__``,
+    closed in :meth:`close`).
 
     Do not use from inside a running asyncio event loop; use :class:`ShamCashAPI`
     instead.
-
-    Example::
-
-        from shamcash import ShamCashAPISync
-
-        with ShamCashAPISync(api_token="...") as client:
-            accounts = client.list_accounts()
     """
 
     def __init__(
@@ -310,6 +328,8 @@ class ShamCashAPISync:
         base_url: str = "https://api.shamcash-api.com/v1",
         timeout: int = 30,
     ) -> None:
+        self._loop: asyncio.AbstractEventLoop = asyncio.new_event_loop()
+        self._closed = False
         self._async_client = ShamCashAPI(
             api_token=api_token,
             base_url=base_url,
@@ -317,28 +337,22 @@ class ShamCashAPISync:
         )
 
     def _run(self, coro: Any) -> Any:
+        if self._closed or self._loop.is_closed():
+            raise RuntimeError("ShamCashAPISync is closed")
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            pass
-        else:
-            raise RuntimeError(
-                "Cannot use ShamCashAPISync inside a running event loop; use ShamCashAPI instead."
-            )
-
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_closed():
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        return loop.run_until_complete(coro)
+            return self._loop.run_until_complete(coro)
+        raise RuntimeError(
+            "Cannot use ShamCashAPISync inside a running event loop; use ShamCashAPI instead."
+        )
 
     def close(self) -> None:
+        if self._closed or self._loop.is_closed():
+            return
         self._run(self._async_client.close())
+        self._loop.close()
+        self._closed = True
 
     def __enter__(self) -> ShamCashAPISync:
         return self
@@ -347,15 +361,12 @@ class ShamCashAPISync:
         self.close()
 
     def list_accounts(self) -> List[Account]:
-        """Sync: :meth:`ShamCashAPI.list_accounts`."""
         return self._run(self._async_client.list_accounts())
 
     def get_account(self, account_id: str) -> Account:
-        """Sync: :meth:`ShamCashAPI.get_account`."""
         return self._run(self._async_client.get_account(account_id))
 
     def get_balances(self, account_id: str) -> BalancesResult:
-        """Sync: :meth:`ShamCashAPI.get_balances`."""
         return self._run(self._async_client.get_balances(account_id))
 
     def list_transactions(
@@ -368,7 +379,6 @@ class ShamCashAPISync:
         coin_id: Optional[int] = None,
         limit: Optional[int] = None,
     ) -> TransactionsResult:
-        """Sync: :meth:`ShamCashAPI.list_transactions`."""
         return self._run(
             self._async_client.list_transactions(
                 account_id,
@@ -380,14 +390,17 @@ class ShamCashAPISync:
             )
         )
 
-    def get_transaction(self, account_id: str, transaction_id: int) -> Optional[IncomingTransaction]:
-        """Sync: :meth:`ShamCashAPI.get_transaction`."""
+    def get_transaction(
+        self, account_id: str, transaction_id: int
+    ) -> Optional[IncomingTransaction]:
         return self._run(self._async_client.get_transaction(account_id, transaction_id))
 
-    @staticmethod
-    def find_transaction_by_id(
-        transactions: Sequence[IncomingTransaction],
-        transaction_id: int,
-    ) -> Optional[IncomingTransaction]:
-        """Sync: :meth:`ShamCashAPI.find_transaction_by_id`."""
-        return ShamCashAPI.find_transaction_by_id(transactions, transaction_id)
+    def fetch_json_envelope(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Optional[Dict[str, Union[str, int]]] = None,
+    ) -> dict[str, Any]:
+        """Sync: :meth:`ShamCashAPI.fetch_json_envelope`."""
+        return self._run(self._async_client.fetch_json_envelope(method, path, params=params))

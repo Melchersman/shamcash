@@ -73,15 +73,21 @@ Use `get_transaction(account_id, transaction_id)` to resolve a single incoming t
 | `get_balances(account_id)` | `BalancesResult` | Per-currency balances |
 | `list_transactions(account_id, **filters)` | `TransactionsResult` | Incoming transactions |
 | `get_transaction(account_id, transaction_id)` | `IncomingTransaction \| None` | One transaction by id |
-| `find_transaction_by_id(transactions, transaction_id)` | `IncomingTransaction \| None` | Local search in a list |
+| `fetch_json_envelope(method, path, params=...)` | `dict` | Full JSON object (`status`, `code`, `message`, `data`); no exception on `status: "error"` |
 
 ### Models
 
-- `Account`, `Currency`, `BalanceRow`, `BalancesResult`, `IncomingTransaction`, `TransactionsResult` — see `shamcash.models`.
+- **Money:** `BalanceRow.available`, `BalanceRow.blocked`, and `IncomingTransaction.amount` are `Decimal` (parsed via string to avoid float rounding).
+- **Time:** `Account.subscription_expires_at` and `IncomingTransaction.occurred_at` are timezone-aware `datetime` objects (ISO 8601 from the API). Raw strings are not kept on the models.
 
 ### Error handling
 
-Exceptions map to API envelope `code` values (e.g. `AuthInvalidError`, `AccountNotFoundError`, `SubscriptionUnavailableError`, `RateLimitExceededError`). Use `ShamCashAPIError` as the base type. Transport or invalid JSON responses raise `NetworkError`.
+- API business errors: envelope `code` → typed subclasses of `ShamCashAPIError` (e.g. `AuthInvalidError`, `AccountNotFoundError`, `RateLimitExceededError`). Each carries `http_status` when available; rate limits may set `retry_after` (seconds) from the `Retry-After` header.
+- **Transport** problems → `NetworkError` (e.g. connection failures).
+- **Timeouts** (total request time) → `RequestTimeoutError` (`code="TIMEOUT"`).
+- **Malformed JSON or shapes that do not match the documented schema** → `ProtocolError` (`code="INVALID_PAYLOAD"`). The high-level methods do not return empty lists/objects to mask server drift; they raise instead.
+
+For debugging or custom handling, `fetch_json_envelope(...)` returns the parsed top-level object even when `status` is `"error"`, and does not map codes to exceptions.
 
 ## Rate limits
 
