@@ -1,5 +1,8 @@
-# Publish source dist + wheel to PyPI when you push a version tag (e.g. v1.0.1).
-# Requires repo secret: PYPI_API_TOKEN (PyPI → Account settings → API tokens)
+# Publish to PyPI only after all tests pass (including live API if token is configured).
+#
+# Secrets:
+#   PYPI_API_TOKEN        — required for upload
+#   SHAMCASH_API_TOKEN    — required for integration tests on tag / manual publish
 
 name: Publish to PyPI
 
@@ -13,8 +16,35 @@ permissions:
   contents: read
 
 jobs:
+  test:
+    name: Tests (unit + integration)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package + dev deps
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+
+      - name: Pytest — unit & mocked HTTP
+        run: pytest -m "not integration" -v --tb=short
+
+      - name: Pytest — live API (requires SHAMCASH_API_TOKEN)
+        env:
+          SHAMCASH_API_TOKEN: ${{ secrets.SHAMCASH_API_TOKEN }}
+        run: |
+          if [ -z "${SHAMCASH_API_TOKEN:-}" ]; then
+            echo "::error::Add repository secret SHAMCASH_API_TOKEN (Settings → Secrets and variables → Actions) to run integration tests before publishing."
+            exit 1
+          fi
+          pytest -m integration -v --tb=short
+
   publish:
     name: Build and upload
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -93,15 +93,34 @@ For debugging or custom handling, `fetch_json_envelope(...)` returns the parsed 
 
 Per linked account: **6 requests per minute** for `GET /accounts/{id}`, `GET /balances`, and `GET /transactions` (see API documentation).
 
+## Development & testing
+
+```bash
+cd shamcash
+python -m pip install -e ".[dev]"
+# Fast tests (no live API):
+pytest -m "not integration" -v
+# Optional: put SHAMCASH_API_TOKEN in a local `.env` file at the repo root (never commit it).
+# Full suite including live API:
+pytest -v
+```
+
+**Do not** commit `.env` or paste API tokens into the repository. On GitHub, use **Settings → Secrets and variables → Actions** for `PYPI_API_TOKEN` and `SHAMCASH_API_TOKEN`.
+
 ## Releasing (maintainers)
 
-PyPI uploads are automated via GitHub Actions when you push a **semver tag** (`v1.0.1`, `v2.0.0`, …).
+PyPI uploads run only after **tests pass** (unit/mocked tests plus **integration** tests against the live API).
 
-1. Bump `version` in `pyproject.toml` and `__version__` in `shamcash/__init__.py` (they must match the tag, without the leading `v`).
-2. Commit and push to your default branch (e.g. `master` or `main`).
-3. Create and push the tag: `git tag v1.0.1` then `git push origin v1.0.1`.
+1. Bump `version` in `pyproject.toml` and `__version__` in `shamcash/__init__.py` (match the tag without the leading `v`).
+2. Commit and push to your default branch.
+3. Push a tag: e.g. `git tag v1.1.2` then `git push origin v1.1.2`.
 
-The workflow needs a repository secret **`PYPI_API_TOKEN`** (PyPI API token with upload scope). You can also run **Actions → Publish to PyPI → Run workflow** manually after configuring the secret.
+**Repository secrets (Actions):**
+
+- **`PYPI_API_TOKEN`** — required to upload to PyPI.
+- **`SHAMCASH_API_TOKEN`** — required so the publish workflow can run live API smoke tests before upload.
+
+Every push to `master` / `main` also runs **CI** (unit + mocked tests only).
 
 ## License
 

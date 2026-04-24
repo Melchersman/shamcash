@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "shamcash"
-version = "1.1.1"
+version = "1.1.2"
 description = "Python client for the ShamCash HTTP API (shamcash-api.com)"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -27,6 +27,14 @@ classifiers = [
 keywords = ["shamcash", "payment", "api", "syria", "wallet"]
 dependencies = ["aiohttp>=3.8.0"]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-asyncio>=0.23",
+    "aioresponses>=0.7.4",
+    "python-dotenv>=1.0",
+]
+
 [project.urls]
 Homepage = "https://github.com/Melchersman/shamcash"
 Documentation = "https://shamcash-api.com"
@@ -38,3 +46,10 @@ packages = ["shamcash"]
 
 [tool.setuptools.package-data]
 shamcash = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "integration: calls the live ShamCash API (requires SHAMCASH_API_TOKEN)",
+]

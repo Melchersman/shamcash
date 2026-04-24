@@ -18,6 +18,8 @@ nosetests.xml
 coverage.xml
 *.cover
 *.env
+.env
+.env.*
 .venv/
 venv/
 ENV/
