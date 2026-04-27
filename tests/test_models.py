@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from decimal import Decimal
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover - Python 3.8 fallback
+    from backports.zoneinfo import ZoneInfo
 
 import pytest
 
@@ -55,7 +61,26 @@ def test_account_parses_subscription_datetime() -> None:
         }
     )
     assert acc.subscription_expires_at is not None
-    assert acc.subscription_expires_at.tzinfo is not None
+    assert acc.subscription_expires_at.tzinfo == timezone.utc
+    assert acc.subscription_expires_at.isoformat() == "2026-05-23T07:35:03+00:00"
+
+
+def test_account_naive_subscription_datetime_assumes_damascus() -> None:
+    acc = Account.from_dict(
+        {
+            "id": "acc_x",
+            "name": "n",
+            "email": "e",
+            "phone": "p",
+            "status": "active",
+            "subscription_expires_at": "2026-04-27 16:29:47",
+        }
+    )
+    assert acc.subscription_expires_at is not None
+    expected = datetime(
+        2026, 4, 27, 16, 29, 47, tzinfo=ZoneInfo("Asia/Damascus")
+    ).astimezone(timezone.utc).isoformat()
+    assert acc.subscription_expires_at.isoformat() == expected
 
 
 def test_incoming_transaction_optional_strings_and_amount() -> None:
@@ -69,6 +94,8 @@ def test_incoming_transaction_optional_strings_and_amount() -> None:
     assert tx.amount == Decimal("0")
     assert tx.receiver_name == ""
     assert tx.note == ""
+    assert tx.occurred_at.tzinfo == timezone.utc
+    assert tx.occurred_at.isoformat() == "2026-04-15T22:22:21+00:00"
 
 
 def test_transactions_result_empty_list() -> None:

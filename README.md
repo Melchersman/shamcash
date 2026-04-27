@@ -67,7 +67,8 @@ with ShamCashAPISync(api_token="...") as client:
 
 - Account, balance, and transaction payloads are exposed as typed dataclasses.
 - Money fields use `Decimal`.
-- Timestamps use timezone-aware `datetime`.
+- Timestamps use timezone-aware UTC `datetime`.
+- Naive ShamCash timestamps are interpreted as `Asia/Damascus` and normalized to UTC.
 
 ## Compatibility
 
