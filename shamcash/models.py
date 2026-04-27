@@ -3,11 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, List, Optional
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover - Python 3.8 fallback
+    from backports.zoneinfo import ZoneInfo  # type: ignore[import-not-found]
+
 from .exceptions import ProtocolError
+
+
+_DAMASCUS_TZ = ZoneInfo("Asia/Damascus")
+_UTC = timezone.utc
 
 
 def _decimal(value: Any, field: str) -> Decimal:
@@ -54,6 +63,22 @@ def _string(value: Any) -> str:
     return "" if value is None else str(value)
 
 
+def _parse_datetime(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        text = str(value).strip()
+        if not text:
+            raise ValueError("empty timestamp")
+        if text.endswith("Z"):
+            text = f"{text[:-1]}+00:00"
+        dt = datetime.fromisoformat(text)
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_DAMASCUS_TZ)
+    return dt.astimezone(_UTC)
+
+
 def _required_datetime(value: Any, field: str) -> datetime:
     if value in (None, ""):
         raise ProtocolError(
@@ -62,7 +87,7 @@ def _required_datetime(value: Any, field: str) -> datetime:
             data={field: value},
         )
     try:
-        return datetime.fromisoformat(str(value))
+        return _parse_datetime(value)
     except ValueError as exc:
         raise ProtocolError(
             f"invalid timestamp for {field!r}",
@@ -75,7 +100,7 @@ def _optional_datetime(value: Any, field: str) -> Optional[datetime]:
     if value in (None, ""):
         return None
     try:
-        return datetime.fromisoformat(str(value))
+        return _parse_datetime(value)
     except ValueError as exc:
         raise ProtocolError(
             f"invalid timestamp for {field!r}",

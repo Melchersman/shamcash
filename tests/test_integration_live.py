@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import timezone
+
 import httpx
 import pytest
 
@@ -112,6 +114,7 @@ async def test_mocked_async_flow() -> None:
             assert balances.account_id == "acc_1"
             txs = await client.list_transactions(account.id, limit=3)
             assert txs.account_id == "acc_1"
+            assert txs.transactions[0].occurred_at.tzinfo == timezone.utc
             tx = await client.get_transaction(account.id, txs.transactions[0].transaction_id)
             assert tx is not None
             assert tx.transaction_id == 123
@@ -128,3 +131,4 @@ def test_mocked_sync_flow() -> None:
             assert balances.account_id == "acc_1"
             txs = client.list_transactions(account.id, limit=3)
             assert txs.transactions[0].transaction_id == 123
+            assert txs.transactions[0].occurred_at.tzinfo == timezone.utc
