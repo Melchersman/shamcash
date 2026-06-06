@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Any, List, Optional
+from pathlib import Path
+from typing import Any, List, Optional, Union
 
 try:
     from zoneinfo import ZoneInfo
@@ -137,6 +138,8 @@ class Account:
     phone: str
     status: str
     subscription_expires_at: Optional[datetime]
+    address: Optional[str] = None
+    qr_payload: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Account":
@@ -154,6 +157,111 @@ class Account:
                 data.get("subscription_expires_at"),
                 "subscription_expires_at",
             ),
+            address=str(data["address"]) if data.get("address") is not None else None,
+            qr_payload=str(data["qr_payload"]) if data.get("qr_payload") is not None else None,
+        )
+
+    def create_qr_code(
+        self,
+        path: Optional[Union[str, Path]] = None,
+        *,
+        size: int = 1024,
+        border: int = 4,
+        foreground: str = "#253C96",
+        background: str = "#F1F3F7",
+        canvas_background: str = "#FFFFFF",
+        panel_border_color: str = "#C9D2E6",
+        caption: Optional[str] = None,
+        caption_color: Optional[str] = None,
+        caption_font_size: Optional[int] = None,
+        caption_max_lines: int = 2,
+        caption_spacing: Optional[int] = None,
+        logo_path: Optional[Union[str, Path]] = None,
+        logo_enabled: bool = True,
+        module_border_color: Optional[str] = None,
+        module_border_width: int = 1,
+    ) -> Any:
+        """Create a QR code image for this account.
+
+        Parameters:
+            path:
+                Optional output path. When provided, the image is saved to this path.
+
+            size:
+                Width of the QR image area in pixels. The final image may be taller when
+                a caption is used.
+
+            border:
+                QR quiet-zone size in modules. Must be at least 4 for reliable scanning.
+
+            foreground:
+                QR module color as a 6-digit hex value.
+
+            background:
+                QR panel background color as a 6-digit hex value.
+
+            canvas_background:
+                Full image background color as a 6-digit hex value.
+
+            panel_border_color:
+                Border color around the QR panel and logo tab.
+
+            caption:
+                Optional text shown below the QR panel.
+
+            caption_color:
+                Caption text color. Uses the foreground color when omitted.
+
+            caption_font_size:
+                Optional caption font size in pixels.
+
+            caption_max_lines:
+                Maximum number of caption lines.
+
+            caption_spacing:
+                Space between the QR panel and the caption in pixels.
+
+            logo_path:
+                Optional path to a PNG, JPG, WEBP, or SVG logo. When omitted, the packaged
+                ShamCash logo is used if available.
+
+            logo_enabled:
+                Whether to show the logo tab above the QR panel.
+
+            module_border_color:
+                Optional color for the thin lines between QR modules. A derived color is
+                used when omitted.
+
+            module_border_width:
+                Width of the thin module border lines in pixels. Use 0 to disable them.
+
+        Returns:
+            A PIL Image. If path is provided, the image is saved before returning.
+        """
+        payload = (self.qr_payload or self.address or "").strip()
+        if not payload:
+            raise ValueError("account has no qr_payload or address")
+
+        from .qr import create_qr_code
+
+        return create_qr_code(
+            payload,
+            path=path,
+            size=size,
+            border=border,
+            foreground=foreground,
+            background=background,
+            canvas_background=canvas_background,
+            panel_border_color=panel_border_color,
+            caption=caption,
+            caption_color=caption_color,
+            caption_font_size=caption_font_size,
+            caption_max_lines=caption_max_lines,
+            caption_spacing=caption_spacing,
+            logo_path=logo_path,
+            logo_enabled=logo_enabled,
+            module_border_color=module_border_color,
+            module_border_width=module_border_width,
         )
 
 

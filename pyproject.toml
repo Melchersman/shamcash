@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "shamcash"
-version = "1.1.5"
+version = "1.2.0"
 description = "Python client for the ShamCash API"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -21,10 +21,20 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Software Development :: Libraries :: Python Modules",
 ]
-keywords = ["shamcash", "sham cash", "shamcash api", "shamcashapi", "payment", "api", "syria", "wallet"]
+keywords = [
+    "shamcash",
+    "sham cash",
+    "shamcash api",
+    "shamcashapi",
+    "api sham cash",
+    "payment",
+    "api",
+    "syria",
+    "wallet",
+]
 dependencies = [
     "httpx>=0.27,<1",
     "backports.zoneinfo>=0.2.1; python_version < '3.9'",
@@ -32,11 +42,21 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+qr = [
+    "qrcode[pil]>=7.4,<9",
+    "Pillow>=10,<12",
+    "cairosvg>=2.7,<3",
+]
 dev = [
     "httpx>=0.27,<1",
+    "qrcode[pil]>=7.4,<9",
+    "Pillow>=10,<12",
+    "cairosvg>=2.7,<3",
     "pytest>=7.4",
     "pytest-asyncio>=0.23",
     "python-dotenv>=1.0",
+    "build>=1.0",
+    "twine>=5.0",
 ]
 
 [project.urls]
@@ -49,7 +69,7 @@ Issues = "https://github.com/Melchersman/shamcash/issues"
 packages = ["shamcash"]
 
 [tool.setuptools.package-data]
-shamcash = ["py.typed"]
+shamcash = ["py.typed", "assets/*.png", "assets/*.svg"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

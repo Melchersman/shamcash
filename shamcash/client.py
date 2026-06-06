@@ -20,6 +20,15 @@ from .models import Account, BalancesResult, IncomingTransaction, TransactionsRe
 Params = Dict[str, Union[str, int]]
 
 
+def _params_with_optional_account(account_id: Optional[str] = None) -> Params:
+    if account_id is None:
+        return {}
+    account_id = str(account_id).strip()
+    if not account_id:
+        raise ValueError("account_id must be non-empty when provided")
+    return {"account_id": account_id}
+
+
 def _format_transaction_ids(transaction_ids: Union[int, Sequence[int], str]) -> str:
     if isinstance(transaction_ids, str):
         return transaction_ids
@@ -196,21 +205,17 @@ class ShamCashAPI:
 
     async def get_account(self, account_id: str) -> Account:
         """Return one linked account."""
-        if not account_id:
-            raise ValueError("account_id must be non-empty")
-        data, http_status = await self._request("GET", f"/accounts/{account_id}")
+        data, http_status = await self._request("GET", "/accounts", params=_params_with_optional_account(account_id))
         return Account.from_dict(_expect_object(data, "account", http_status))
 
-    async def get_balances(self, account_id: str) -> BalancesResult:
-        """Return balances for one account."""
-        if not account_id:
-            raise ValueError("account_id must be non-empty")
-        data, http_status = await self._request("GET", "/balances", params={"account_id": account_id})
+    async def get_balances(self, account_id: Optional[str] = None) -> BalancesResult:
+        """Return account balances."""
+        data, http_status = await self._request("GET", "/balances", params=_params_with_optional_account(account_id))
         return BalancesResult.from_dict(_expect_object(data, "balances", http_status))
 
     async def list_transactions(
         self,
-        account_id: str,
+        account_id: Optional[str] = None,
         *,
         start_at: Optional[str] = None,
         end_at: Optional[str] = None,
@@ -218,10 +223,8 @@ class ShamCashAPI:
         coin_id: Optional[int] = None,
         limit: Optional[int] = None,
     ) -> TransactionsResult:
-        """Return incoming transactions for one account."""
-        if not account_id:
-            raise ValueError("account_id must be non-empty")
-        params: Params = {"account_id": account_id}
+        """Return incoming transactions."""
+        params: Params = _params_with_optional_account(account_id)
         if start_at is not None:
             params["start_at"] = start_at
         if end_at is not None:
@@ -237,12 +240,17 @@ class ShamCashAPI:
 
     async def get_transaction(
         self,
-        account_id: str,
-        transaction_id: int,
+        account_id: Optional[Union[str, int]] = None,
+        transaction_id: Optional[int] = None,
     ) -> Optional[IncomingTransaction]:
         """Return one transaction by id."""
+        if transaction_id is None:
+            if account_id is None:
+                raise ValueError("transaction_id is required")
+            transaction_id = int(account_id)
+            account_id = None
         result = await self.list_transactions(
-            account_id,
+            str(account_id) if account_id is not None else None,
             transaction_ids=transaction_id,
             limit=1,
         )
@@ -330,21 +338,17 @@ class ShamCashAPISync:
 
     def get_account(self, account_id: str) -> Account:
         """Return one linked account."""
-        if not account_id:
-            raise ValueError("account_id must be non-empty")
-        data, http_status = self._request("GET", f"/accounts/{account_id}")
+        data, http_status = self._request("GET", "/accounts", params=_params_with_optional_account(account_id))
         return Account.from_dict(_expect_object(data, "account", http_status))
 
-    def get_balances(self, account_id: str) -> BalancesResult:
-        """Return balances for one account."""
-        if not account_id:
-            raise ValueError("account_id must be non-empty")
-        data, http_status = self._request("GET", "/balances", params={"account_id": account_id})
+    def get_balances(self, account_id: Optional[str] = None) -> BalancesResult:
+        """Return account balances."""
+        data, http_status = self._request("GET", "/balances", params=_params_with_optional_account(account_id))
         return BalancesResult.from_dict(_expect_object(data, "balances", http_status))
 
     def list_transactions(
         self,
-        account_id: str,
+        account_id: Optional[str] = None,
         *,
         start_at: Optional[str] = None,
         end_at: Optional[str] = None,
@@ -352,10 +356,8 @@ class ShamCashAPISync:
         coin_id: Optional[int] = None,
         limit: Optional[int] = None,
     ) -> TransactionsResult:
-        """Return incoming transactions for one account."""
-        if not account_id:
-            raise ValueError("account_id must be non-empty")
-        params: Params = {"account_id": account_id}
+        """Return incoming transactions."""
+        params: Params = _params_with_optional_account(account_id)
         if start_at is not None:
             params["start_at"] = start_at
         if end_at is not None:
@@ -371,9 +373,18 @@ class ShamCashAPISync:
 
     def get_transaction(
         self,
-        account_id: str,
-        transaction_id: int,
+        account_id: Optional[Union[str, int]] = None,
+        transaction_id: Optional[int] = None,
     ) -> Optional[IncomingTransaction]:
         """Return one transaction by id."""
-        result = self.list_transactions(account_id, transaction_ids=transaction_id, limit=1)
+        if transaction_id is None:
+            if account_id is None:
+                raise ValueError("transaction_id is required")
+            transaction_id = int(account_id)
+            account_id = None
+        result = self.list_transactions(
+            str(account_id) if account_id is not None else None,
+            transaction_ids=transaction_id,
+            limit=1,
+        )
         return result.transactions[0] if result.transactions else None
