@@ -65,6 +65,23 @@ def test_account_parses_subscription_datetime() -> None:
     assert acc.subscription_expires_at.isoformat() == "2026-05-23T07:35:03+00:00"
 
 
+def test_account_parses_address_and_qr_payload() -> None:
+    acc = Account.from_dict(
+        {
+            "id": "acc_x",
+            "name": "n",
+            "email": "e",
+            "phone": "p",
+            "address": "SHC_ADDRESS",
+            "qr_payload": "SHC_ADDRESS",
+            "status": "active",
+            "subscription_expires_at": None,
+        }
+    )
+    assert acc.address == "SHC_ADDRESS"
+    assert acc.qr_payload == "SHC_ADDRESS"
+
+
 def test_account_naive_subscription_datetime_assumes_damascus() -> None:
     acc = Account.from_dict(
         {

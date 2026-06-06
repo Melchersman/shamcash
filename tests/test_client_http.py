@@ -39,6 +39,8 @@ async def test_async_list_accounts_success() -> None:
                         "name": "a",
                         "email": "e",
                         "phone": "p",
+                        "address": "SHC_ADDRESS",
+                        "qr_payload": "SHC_ADDRESS",
                         "status": "active",
                         "subscription_expires_at": None,
                     }
@@ -52,6 +54,8 @@ async def test_async_list_accounts_success() -> None:
 
     assert len(accounts) == 1
     assert accounts[0].id == "acc_1"
+    assert accounts[0].address == "SHC_ADDRESS"
+    assert accounts[0].qr_payload == "SHC_ADDRESS"
 
 
 @pytest.mark.asyncio
@@ -71,6 +75,38 @@ async def test_async_invalid_accounts_payload_raises() -> None:
         async with ShamCashAPI(api_token="tok", base_url=_API, client=http_client) as client:
             with pytest.raises(ProtocolError, match="accounts must be an array"):
                 await client.list_accounts()
+
+
+@pytest.mark.asyncio
+async def test_async_get_account_uses_account_id_query() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/accounts")
+        assert request.url.params["account_id"] == "acc_1"
+        return _response(
+            request,
+            {
+                "status": "success",
+                "code": "SUCCESS",
+                "message": "ok",
+                "data": {
+                    "id": "acc_1",
+                    "name": "a",
+                    "email": "e",
+                    "phone": "p",
+                    "address": "SHC_ADDRESS",
+                    "qr_payload": "SHC_ADDRESS",
+                    "status": "active",
+                    "subscription_expires_at": None,
+                },
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        async with ShamCashAPI(api_token="tok", base_url=_API, client=http_client) as client:
+            account = await client.get_account("acc_1")
+
+    assert account.id == "acc_1"
+    assert account.qr_payload == "SHC_ADDRESS"
 
 
 @pytest.mark.asyncio
@@ -149,6 +185,55 @@ async def test_async_get_balances() -> None:
 
 
 @pytest.mark.asyncio
+async def test_async_get_balances_without_account_id() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "account_id" not in request.url.params
+        return _response(
+            request,
+            {
+                "status": "success",
+                "code": "SUCCESS",
+                "message": "ok",
+                "data": {
+                    "account_id": "acc_1",
+                    "balances": [],
+                },
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        async with ShamCashAPI(api_token="tok", base_url=_API, client=http_client) as client:
+            balances = await client.get_balances()
+
+    assert balances.account_id == "acc_1"
+
+
+@pytest.mark.asyncio
+async def test_async_list_transactions_without_account_id() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "account_id" not in request.url.params
+        assert request.url.params["limit"] == "5"
+        return _response(
+            request,
+            {
+                "status": "success",
+                "code": "SUCCESS",
+                "message": "ok",
+                "data": {
+                    "account_id": "acc_1",
+                    "transactions": [],
+                },
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        async with ShamCashAPI(api_token="tok", base_url=_API, client=http_client) as client:
+            transactions = await client.list_transactions(limit=5)
+
+    assert transactions.account_id == "acc_1"
+
+
+@pytest.mark.asyncio
 async def test_async_fetch_json_envelope() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return _response(
@@ -186,6 +271,37 @@ def test_sync_list_accounts_success() -> None:
             assert client.list_accounts() == []
 
 
+def test_sync_get_account_uses_account_id_query() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/accounts")
+        assert request.url.params["account_id"] == "acc_1"
+        return _response(
+            request,
+            {
+                "status": "success",
+                "code": "SUCCESS",
+                "message": "ok",
+                "data": {
+                    "id": "acc_1",
+                    "name": "a",
+                    "email": "e",
+                    "phone": "p",
+                    "address": "SHC_ADDRESS",
+                    "qr_payload": "SHC_ADDRESS",
+                    "status": "active",
+                    "subscription_expires_at": None,
+                },
+            },
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http_client:
+        with ShamCashAPISync(api_token="tok", base_url=_API, client=http_client) as client:
+            account = client.get_account("acc_1")
+
+    assert account.id == "acc_1"
+    assert account.address == "SHC_ADDRESS"
+
+
 def test_sync_get_transaction_empty() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return _response(
@@ -204,5 +320,27 @@ def test_sync_get_transaction_empty() -> None:
     with httpx.Client(transport=httpx.MockTransport(handler)) as http_client:
         with ShamCashAPISync(api_token="tok", base_url=_API, client=http_client) as client:
             assert client.get_transaction("acc_1", 1) is None
+
+
+def test_sync_get_transaction_without_account_id() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "account_id" not in request.url.params
+        assert request.url.params["transaction_ids"] == "1"
+        return _response(
+            request,
+            {
+                "status": "success",
+                "code": "SUCCESS",
+                "message": "ok",
+                "data": {
+                    "account_id": "acc_1",
+                    "transactions": [],
+                },
+            },
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http_client:
+        with ShamCashAPISync(api_token="tok", base_url=_API, client=http_client) as client:
+            assert client.get_transaction(1) is None
 
 

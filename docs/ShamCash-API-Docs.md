@@ -67,7 +67,7 @@ Account specific read operations are throttled at **6 requests per minute per li
 
 This limit currently applies to:
 
-- `GET /accounts/{account_id}`
+- `GET /accounts?account_id=...`
 - `GET /balances?account_id=...`
 - `GET /transactions?account_id=...`
 
@@ -141,7 +141,15 @@ Exact HTTP status codes may be tuned per deployment. Client libraries should rel
 
 ### `GET /accounts`
 
-Returns every ShamCash account linked to the authenticated platform user.
+Returns ShamCash accounts linked to the authenticated platform user.
+
+### Query parameters
+
+| Name | Type | Required | Description |
+|---|---|---:|---|
+| `account_id` | string | No | Optional linked account id. Omit to return every linked account. |
+
+When `account_id` is provided, `data` is one account object. When omitted, `data` is an array of account objects.
 
 ### Success response
 
@@ -156,6 +164,8 @@ Returns every ShamCash account linked to the authenticated platform user.
       "name": "string",
       "email": "string",
       "phone": "string",
+      "address": "string",
+      "qr_payload": "string",
       "status": "active",
       "subscription_expires_at": "2026-12-31T23:59:59+03:00"
     }
@@ -171,6 +181,8 @@ Returns every ShamCash account linked to the authenticated platform user.
 | `name` | string | Display name |
 | `email` | string | Email on file for this linked account |
 | `phone` | string | Phone number on file for this linked account |
+| `address` | string \| null | Plain ShamCash account address, or `null` when the address is not known yet |
+| `qr_payload` | string \| null | Same plain text value as `address`, or `null` when the address is not known yet |
 | `status` | string | `active` or `inactive` |
 | `subscription_expires_at` | string \| null | End of the current subscription period as ISO 8601 with offset, or `null` |
 
@@ -183,7 +195,7 @@ Treat an account as unavailable for `/balances` and `/transactions` when:
 
 ---
 
-### `GET /accounts/{account_id}`
+### `GET /accounts?account_id=...`
 
 Returns a single linked account by id.
 
@@ -201,6 +213,8 @@ This is useful when the client already knows which account it cares about and do
     "name": "string",
     "email": "string",
     "phone": "string",
+    "address": "string",
+    "qr_payload": "string",
     "status": "active",
     "subscription_expires_at": "2026-12-31T23:59:59+03:00"
   }
@@ -230,7 +244,9 @@ Returns balance rows for one linked account.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `account_id` | string | Yes | Linked account id from `GET /accounts` |
+| `account_id` | string | No* | Linked account id from `GET /accounts` |
+
+`account_id` may be omitted when the API token has exactly one linked ShamCash account. If the token has multiple linked accounts, `account_id` is required.
 
 ### Success response
 
@@ -279,7 +295,7 @@ Returns **incoming** transactions for one linked account, with optional filters.
 
 | # | Parameter | Type | Required | Description |
 |---:|---|---|---|---|
-| 1 | `account_id` | string | Yes | Linked account id from `GET /accounts` |
+| 1 | `account_id` | string | No* | Linked account id from `GET /accounts` |
 | 2 | `start_at` | string | No | Inclusive lower bound. `YYYY-MM-DD` or datetime. Assumed Asia or Damascus if no offset is present |
 | 3 | `end_at` | string | No | Inclusive upper bound. Same rules as `start_at` |
 | 4 | `transaction_ids` | string | No | Comma separated numeric ids, or repeated parameter form |
@@ -290,7 +306,7 @@ Returns **incoming** transactions for one linked account, with optional filters.
 
 Filtering is applied in this logical order:
 
-1. scope to the requested `account_id`
+1. scope to the requested `account_id`, or the token owner's only linked ShamCash account when `account_id` is omitted
 2. filter by `start_at` and `end_at` when present
 3. filter by `coin_id` when present
 4. intersect with `transaction_ids` when present

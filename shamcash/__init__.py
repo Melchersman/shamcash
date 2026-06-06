@@ -26,8 +26,9 @@ from .models import (
     IncomingTransaction,
     TransactionsResult,
 )
+from .qr import create_qr_code
 
-__version__ = "1.1.5"
+__version__ = "1.2.0"
 
 __all__ = [
     "ShamCashAPI",
@@ -38,6 +39,7 @@ __all__ = [
     "Currency",
     "IncomingTransaction",
     "TransactionsResult",
+    "create_qr_code",
     "ShamCashAPIError",
     "ValidationError",
     "AuthMissingError",
