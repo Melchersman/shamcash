@@ -32,7 +32,7 @@ The `v1` path segment is the current major version. Incompatible changes will be
 
 ### Content type
 
-Responses use `application/json`. Send JSON request bodies with `Content-Type: application/json`.
+Responses use `application/json`, except the linking QR download, which returns `image/png`. Send JSON request bodies with `Content-Type: application/json`.
 
 ### Time zones
 
@@ -238,7 +238,7 @@ Plan `price_usd` is the authenticated owner's price after their subscription dis
 
 ### `GET /plans`
 
-Returns `data.plans`, an array of active plans. Each contains `id`, `code`, `name`, `price_usd`, `compare_price_usd` (nullable), and `duration_days`. Use the returned price and ID rather than hardcoding them.
+Returns `data.plans`, an array of active plans. Each contains `id`, `code`, `name`, `price_usd`, `base_price_usd`, `discount_percent`, `compare_price_usd` (nullable), and `duration_days`. Use the returned price and ID rather than hardcoding them.
 
 ### `POST /accounts/{account_id}/trial`
 
@@ -272,6 +272,8 @@ Returns `200 SUBSCRIPTION_ACTIVATED`, with the updated `account` and purchase de
   "periods": 3,
   "duration_days": 90,
   "price_usd": 2,
+  "base_price_usd": 2,
+  "discount_percent": 0,
   "charged_usd": 6,
   "wallet_balance_usd": 4,
   "subscription_expires_at": "2027-01-18T16:00:00+03:00",
