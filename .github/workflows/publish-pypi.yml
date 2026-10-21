@@ -84,4 +84,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.version.outputs.version }}
         run: |
-          gh release create "v$VERSION" dist/* --target "$GITHUB_SHA" --title "$VERSION" --notes-file RELEASE_NOTES.md --verify-tag=false
+          gh release create "v$VERSION" dist/* --target "$GITHUB_SHA" --title "$VERSION" --notes-file RELEASE_NOTES.md
