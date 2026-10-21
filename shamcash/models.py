@@ -110,6 +110,12 @@ def _optional_datetime(value: Any, field: str) -> Optional[datetime]:
         ) from exc
 
 
+def _optional_boolean(value: Any, field: str) -> Optional[bool]:
+    if value is None or isinstance(value, bool):
+        return value
+    raise ProtocolError(f"invalid boolean for {field!r}", code="INVALID_PAYLOAD")
+
+
 @dataclass(frozen=True)
 class Currency:
     """Currency descriptor."""
@@ -140,6 +146,9 @@ class Account:
     subscription_expires_at: Optional[datetime]
     address: Optional[str] = None
     qr_payload: Optional[str] = None
+    subscription_type: Optional[str] = None
+    auto_renew: Optional[bool] = None
+    provider_session_status: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Account":
@@ -159,6 +168,9 @@ class Account:
             ),
             address=str(data["address"]) if data.get("address") is not None else None,
             qr_payload=str(data["qr_payload"]) if data.get("qr_payload") is not None else None,
+            subscription_type=str(data["subscription_type"]) if data.get("subscription_type") is not None else None,
+            auto_renew=_optional_boolean(data.get("auto_renew"), "auto_renew"),
+            provider_session_status=str(data["provider_session_status"]) if data.get("provider_session_status") is not None else None,
         )
 
     def create_qr_code(

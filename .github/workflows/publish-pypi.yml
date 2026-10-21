@@ -1,54 +1,87 @@
-# Publish to PyPI only after tests pass.
-#
-# Secrets:
-#   PYPI_API_TOKEN — required for upload
-
 name: Publish to PyPI
 
 on:
   push:
-    tags:
-      - "v*.*.*"
+    branches: ["master"]
+    paths: ["pyproject.toml"]
+    tags: ["v*.*.*"]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: pypi-release
+  cancel-in-progress: false
+
 jobs:
-  test:
-    name: Tests
+  version:
+    name: Check release version
     runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.version.outputs.publish }}
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Check tag and version change
+        id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          import subprocess
+          import tomllib
+          from pathlib import Path
 
-      - name: Install package + dev deps
-        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+          version = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+          if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+              raise SystemExit("Release version must have three numeric components")
+          ref = os.environ["REF"]
+          publish = True
+          if ref.startswith("refs/tags/") and ref != f"refs/tags/v{version}":
+              raise SystemExit("Tag does not match the package version")
+          if os.environ["EVENT_NAME"] == "push" and ref == "refs/heads/master":
+              previous = subprocess.check_output(["git", "show", os.environ["BEFORE"] + ":pyproject.toml"], text=True)
+              publish = tomllib.loads(previous)["project"]["version"] != version
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"publish={str(publish).lower()}\nversion={version}\n")
+          PY
 
-      - name: Pytest
-        run: pytest -v --tb=short
+  checks:
+    name: Release checks
+    needs: version
+    if: needs.version.outputs.publish == 'true'
+    uses: ./.github/workflows/ci.yml
 
   publish:
-    name: Build and upload
-    needs: test
+    name: Publish checked distributions
+    needs: [version, checks]
+    if: needs.version.outputs.publish == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
+      - uses: actions/download-artifact@v4
         with:
-          python-version: "3.12"
-
-      - name: Install build
-        run: python -m pip install --upgrade pip build
-
-      - name: Build sdist and wheel
-        run: python -m build
-
+          name: distributions
+          path: dist/
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          gh release create "v$VERSION" dist/* --target "$GITHUB_SHA" --title "$VERSION" --notes-file RELEASE_NOTES.md --verify-tag=false
