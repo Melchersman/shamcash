@@ -1,124 +1,26 @@
 # shamcash
 
-Python client for the ShamCash API.
-
-The package provides sync and async clients for reading linked accounts, balances, and incoming transactions from the ShamCash public API.
-
-## Installation
+Python client for the [ShamCash API](https://shamcash-api.com), with sync and async clients for account linking, subscriptions, balances, and incoming transactions.
 
 ```bash
 pip install shamcash
 ```
 
-QR code generation is optional:
+Python 3.8+ is supported. Money is returned as `Decimal`; timestamps are timezone-aware UTC `datetime` objects. Naive provider timestamps are interpreted in `Asia/Damascus` before conversion.
 
-```bash
-pip install "shamcash[qr]"
-```
-
-## Quick start
+## Read an account
 
 ```python
 from shamcash import ShamCashAPISync
 
 with ShamCashAPISync(api_token="...") as client:
     accounts = client.list_accounts()
-    account = accounts[0]
-
+    account = client.get_account("account_id")
     balances = client.get_balances(account.id)
     transactions = client.list_transactions(account.id, limit=20)
 ```
 
-## Async client
-
-```python
-import asyncio
-
-from shamcash import ShamCashAPI
-
-
-async def main() -> None:
-    async with ShamCashAPI(api_token="...") as client:
-        accounts = await client.list_accounts()
-        account = accounts[0]
-
-        balances = await client.get_balances(account.id)
-        transactions = await client.list_transactions(account.id, limit=20)
-
-
-asyncio.run(main())
-```
-
-## Sync client
-
-```python
-from shamcash import ShamCashAPISync
-
-with ShamCashAPISync(api_token="...") as client:
-    accounts = client.list_accounts()
-    account = accounts[0]
-
-    balances = client.get_balances(account.id)
-    transactions = client.list_transactions(account.id, limit=20)
-```
-
-## Accounts
-
-```python
-accounts = client.list_accounts()
-
-for account in accounts:
-    print(account.id)
-    print(account.name)
-    print(account.phone)
-    print(account.status)
-```
-
-Fetch a single linked account by ID:
-
-```python
-account = client.get_account("account_id")
-```
-
-Use this when you already know the account ID and do not need the full list from `list_accounts()`.
-
-## Balances
-
-```python
-balances = client.get_balances(account_id="account_id")
-
-for row in balances.balances:
-    print(row.currency.code)
-    print(row.available)
-    print(row.blocked)
-```
-
-If the API token has exactly one linked account, `account_id` can be omitted:
-
-```python
-balances = client.get_balances()
-```
-
-Money values are returned as `Decimal`.
-
-## Transactions
-
-```python
-transactions = client.list_transactions(
-    account_id="account_id",
-    limit=20,
-)
-
-for tx in transactions.transactions:
-    print(tx.transaction_id)
-    print(tx.amount)
-    print(tx.currency.code)
-    print(tx.occurred_at)
-    print(tx.sender_name)
-    print(tx.note)
-```
-
-Available filters:
+When the token has exactly one linked account, `account_id` can be omitted from balance and transaction requests.
 
 ```python
 transactions = client.list_transactions(
@@ -129,177 +31,164 @@ transactions = client.list_transactions(
     coin_id=1,
     limit=50,
 )
-```
 
-You can fetch one transaction by ID:
+for tx in transactions.transactions:
+    print(tx.transaction_id, tx.amount, tx.currency.code, tx.occurred_at)
 
-```python
+transaction = client.get_transaction("account_id", 184627893)
+# With one linked account:
 transaction = client.get_transaction(184627893)
 ```
 
-Or with an account ID:
+`get_transaction()` returns `None` when the transaction is absent.
+
+## Link accounts from your application
+
+Enable account management for the API token in the platform before creating sessions or changing accounts and subscriptions. Reading accounts, balances, transactions, and plans does not require this permission. A token without it receives `APIManagementDisabledError`.
 
 ```python
-transaction = client.get_transaction("account_id", 184627893)
+from pathlib import Path
+from shamcash import ShamCashAPISync
+
+with ShamCashAPISync(api_token="...") as client:
+    session = client.create_link_session()
+    Path("link.png").write_bytes(client.get_link_qr(session.link_session_id))
+
+    # Display link.png for the user to scan in ShamCash.
+    linked = client.wait_for_link(session.link_session_id)
+    account = linked.account
+    print(account.id, account.name)
 ```
 
-The method returns `None` when the transaction is not found.
+Creation returns `qr_payload`, the exact `qr_text`, and a `qr_image` PNG data URI. `get_link_qr()` downloads PNG bytes and needs no optional image dependencies. These are login credentials for the pending session; keep them private and avoid logging them.
 
-## QR code generation
+For your own polling loop, call `get_link_session(session_id)`. A pending result includes `remaining_seconds`, `approval_received`, and `poll_after_seconds`. Keep one poll in flight per session and respect the returned interval. `wait_for_link()` handles this pacing, returns a successful `LinkSession`, and raises `LinkExpiredError` or `LinkFailedError` for terminal failures. Its default local deadline is 780 seconds, allowing approval received before QR expiry to finish during the server's completion window. A local or transport timeout raises `RequestTimeoutError`; it does not establish that the session expired.
 
-Install the QR extra first:
+Re-link an existing account with `create_link_session(target_account_id="account_id")`. This replaces its provider session while preserving its platform account ID and subscription. It must be approved by the same ShamCash identity.
+
+## Plans and prepaid subscriptions
+
+`list_plans()` returns each plan's `duration_days` and USD price for the token owner. `price_usd` includes the owner's discount; `base_price_usd` and `discount_percent` describe that discount. Prices are checked again when a purchase is made.
+
+```python
+plans = client.list_plans()
+plan = plans[0]
+print(plan.duration_days, plan.price_usd, plan.discount_percent)
+
+receipt = client.subscribe(
+    "account_id",
+    plan_id=plan.id,
+    periods=3,
+    idempotency_key="checkout-order-42",
+)
+print(receipt.charged_usd, receipt.subscription_expires_at)
+```
+
+The same method starts or renews paid access. `periods` accepts 1–120 plan periods and charges the platform USD wallet once. A 30-day plan purchased for three periods adds 90 days after existing access, or from now if it has expired. `plan_id=None` selects the server's default paid plan.
+
+Choose a stable key for each intentional purchase. After a timeout or uncertain response, repeat the same account, plan, periods, and key to retrieve the original receipt without another charge. Use a new key for another purchase. Changed parameters with an existing key raise `IdempotencyKeyReusedError`. The client never retries a charge automatically or creates purchase keys for you.
+
+Receipts include `subscription_id`, the account snapshot, purchased duration, unit and total prices, wallet balance, expiry, `remaining_seconds`, and auto-renew status. A replay returns the original snapshot, including its original discount and remaining time.
+
+```python
+settings = client.set_auto_renew("account_id", False)
+settings = client.set_auto_renew("account_id", True)
+trial_account = client.start_trial("account_id")
+deleted_id = client.delete_account("account_id")
+```
+
+Auto-renew is set explicitly and leaves prepaid expiry unchanged. Deleting removes the platform link and its subscription; it does not delete the ShamCash wallet or refund unused time. A free trial can be activated once per eligible account.
+
+## Async client
+
+`ShamCashAPI` has the same methods and arguments as `ShamCashAPISync`:
+
+```python
+import asyncio
+from shamcash import ShamCashAPI
+
+async def main():
+    async with ShamCashAPI(api_token="...") as client:
+        session = await client.create_link_session()
+        png = await client.get_link_qr(session.link_session_id)
+        # Display png to the user before waiting for approval.
+        linked = await client.wait_for_link(session.link_session_id)
+        print(linked.account_id)
+
+asyncio.run(main())
+```
+
+Both clients accept an injected `httpx` client; the caller remains responsible for closing it. The async client's existing `session=` alias is also supported. Polling uses a per-request timeout of up to 120 seconds; ordinary requests use the configured HTTP client timeout, 30 seconds by default.
+
+## Methods and results
+
+| Method | Result |
+| --- | --- |
+| `list_accounts()` | `list[Account]` |
+| `get_account(account_id)` | `Account` |
+| `get_balances(account_id=None)` | `BalancesResult` |
+| `list_transactions(account_id=None, ...)` | `TransactionsResult` |
+| `get_transaction(account_id, transaction_id)` | `IncomingTransaction` or `None` |
+| `create_link_session(target_account_id=None)` | `LinkSession` with login QR data |
+| `get_link_session(session_id, timeout=120)` | `LinkSession` |
+| `get_link_qr(session_id)` | PNG `bytes` |
+| `wait_for_link(session_id, timeout=780, poll_interval=3)` | Successful `LinkSession` |
+| `list_plans()` | `list[Plan]` |
+| `subscribe(account_id, idempotency_key=..., plan_id=None, periods=1)` | `SubscriptionReceipt` |
+| `set_auto_renew(account_id, enabled)` | `SubscriptionSettings` |
+| `start_trial(account_id)` | `Account` |
+| `delete_account(account_id)` | Deleted account ID |
+| `fetch_json_envelope(method, path, params=None, json=None, headers=None)` | Original JSON envelope, including API errors |
+
+Optional method arguments shown after the resource ID are keyword-only, except `enabled`.
+
+## Errors
+
+All SDK exceptions inherit from `ShamCashAPIError` and expose `code`, `message`, `data`, `http_status`, and `retry_after`. Unknown API codes retain these fields in the base exception. `RateLimitExceededError.retry_after` contains the server's delay in seconds when supplied.
+
+| API code | Exception |
+| --- | --- |
+| `API_MANAGEMENT_DISABLED` | `APIManagementDisabledError` |
+| `LINK_EXPIRED` | `LinkExpiredError` |
+| `LINK_FAILED` | `LinkFailedError` |
+| `LINK_QR_UNAVAILABLE` | `LinkQRUnavailableError` |
+| `PLAN_NOT_FOUND` | `PlanNotFoundError` |
+| `INSUFFICIENT_BALANCE` | `InsufficientBalanceError` |
+| `TRIAL_ALREADY_USED` | `TrialAlreadyUsedError` |
+| `SUBSCRIPTION_ALREADY_ACTIVE` | `SubscriptionAlreadyActiveError` |
+| `IDEMPOTENCY_KEY_REQUIRED` | `IdempotencyKeyRequiredError` |
+| `IDEMPOTENCY_KEY_REUSED` | `IdempotencyKeyReusedError` |
+| `SHAMCASH_SESSION_EXPIRED` | `ShamCashSessionExpiredError` |
+| `UPSTREAM_UNAVAILABLE` | `UpstreamUnavailableError` |
+
+Existing authentication, account, subscription, rate-limit, and fetch exceptions remain available. Transport failures raise `NetworkError`; timeouts raise `RequestTimeoutError`. Invalid JSON or response shapes raise `ProtocolError`. Invalid local method arguments raise `ValueError` before a request is sent.
+
+The [HTTP API reference](docs/ShamCash-API-Docs.md) lists status codes, response fields, and endpoint behavior.
+
+## Receiving-address QR generation
+
+Account `address` and `qr_payload` describe the receiving address. To render that QR locally, install the optional extra:
 
 ```bash
 pip install "shamcash[qr]"
 ```
 
-The default style uses ShamCash brand colors, a logo tab above the QR card, square modules with thin borders, and an optional caption below the card. The packaged logo is used automatically.
-
-Generate a QR code from an account:
-
 ```python
-from shamcash import ShamCashAPISync
+account.create_qr_code("receiving-address.png", size=1024, caption="ShamCash payment address")
 
-with ShamCashAPISync(api_token="...") as client:
-    account = client.list_accounts()[0]
-
-    account.create_qr_code(
-        "receiving-address.png",
-        size=1024,
-        caption="Pay to Melchersman",
-    )
+from shamcash import create_qr_code
+image = create_qr_code("SHM-ADDRESS", "qr.png", caption="Payment address")
 ```
 
-You can also generate a QR code directly from a payload:
+The renderer returns a PIL Image and saves it when a path is supplied. Styling options include `foreground`, `background`, `caption_color`, `logo_path`, `logo_enabled`, and `module_border_width`. SVG logos require CairoSVG; the packaged logo is included by default.
 
-```python
-from shamcash.qr import create_qr_code
+## Development
 
-create_qr_code(
-    "SC_ADDRESS_OR_QR_PAYLOAD",
-    "qr.png",
-    caption="ShamCash payment address",
-)
+```bash
+pip install -e ".[dev]"
+pytest -q
+python -m build
+python -m twine check dist/*
 ```
 
-Optional styling parameters include `foreground`, `background`, `caption_color`, `logo_path`, `logo_enabled`, and `module_border_width`.
-
-Pass an SVG path to `logo_path` when `cairosvg` is installed. Otherwise use a PNG logo or rely on the packaged default logo.
-
-`create_qr_code()` returns a PIL Image. If `path` is provided, the image is saved.
-
-## Raw API envelopes
-
-Use `fetch_json_envelope()` when you need the original API envelope instead of typed models:
-
-```python
-envelope = client.fetch_json_envelope("GET", "/accounts")
-```
-
-The returned value is the decoded JSON object returned by the API.
-
-## Errors
-
-API errors are mapped to typed exceptions.
-
-Common exceptions include:
-
-* `AuthInvalidError`
-* `AccountNotFoundError`
-* `SubscriptionUnavailableError`
-* `RateLimitExceededError`
-* `NetworkError`
-* `RequestTimeoutError`
-* `ProtocolError`
-
-Transport failures raise `NetworkError`.
-
-Timeouts raise `RequestTimeoutError`.
-
-Invalid JSON responses or unexpected response shapes raise `ProtocolError`.
-
-## Main methods
-
-### Sync
-
-```python
-client.list_accounts()
-client.get_account(account_id)
-client.get_balances(account_id=None)
-client.list_transactions(
-    account_id=None,
-    *,
-    start_at=None,
-    end_at=None,
-    transaction_ids=None,
-    coin_id=None,
-    limit=None,
-)
-client.get_transaction(account_id, transaction_id)
-client.get_transaction(transaction_id)
-client.fetch_json_envelope(method, path, params=None)
-```
-
-### Async
-
-```python
-await client.list_accounts()
-await client.get_account(account_id)
-await client.get_balances(account_id=None)
-await client.list_transactions(
-    account_id=None,
-    start_at=None,
-    end_at=None,
-    transaction_ids=None,
-    coin_id=None,
-    limit=None,
-)
-await client.get_transaction(account_id, transaction_id)
-await client.get_transaction(transaction_id)
-await client.fetch_json_envelope(method, path, params=None)
-```
-
-## Models
-
-The package exposes typed dataclasses for API responses.
-
-Main models:
-
-* `Account`
-* `Currency`
-* `BalanceRow`
-* `BalancesResult`
-* `IncomingTransaction`
-* `TransactionsResult`
-
-`Account` includes:
-
-* `id`
-* `name`
-* `email`
-* `phone`
-* `status`
-* `subscription_expires_at`
-* `address`
-* `qr_payload`
-
-`IncomingTransaction` includes:
-
-* `transaction_id`
-* `amount`
-* `currency`
-* `occurred_at`
-* `receiver_name`
-* `sender_name`
-* `sender_address`
-* `note`
-
-## Time handling
-
-Timestamps are returned as timezone-aware UTC `datetime` objects.
-
-Naive ShamCash timestamps are interpreted as `Asia/Damascus` and then converted to UTC.
-
-## Compatibility
-
-Python 3.8+ is supported.
+Tests use HTTP fixtures and do not require a platform token. CI runs the suite on Python 3.8–3.14 and checks the built distribution before publishing.

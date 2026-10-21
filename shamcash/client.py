@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import math
+import re
+import time
+from urllib.parse import quote
 from collections.abc import Sequence
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -16,6 +21,7 @@ from .exceptions import (
     raise_for_envelope_code,
 )
 from .models import Account, BalancesResult, IncomingTransaction, TransactionsResult
+from .lifecycle import LinkSession, Plan, SubscriptionReceipt, SubscriptionSettings
 
 Params = Dict[str, Union[str, int]]
 
@@ -40,7 +46,11 @@ def _format_transaction_ids(transaction_ids: Union[int, Sequence[int], str]) -> 
 def _parse_json_envelope(response: httpx.Response) -> dict[str, Any]:
     text = response.text
     if not text.strip():
-        raise ProtocolError("empty response body", code="INVALID_PAYLOAD", http_status=response.status_code)
+        raise ProtocolError(
+            "empty response body",
+            code="INVALID_PAYLOAD",
+            http_status=response.status_code,
+        )
     try:
         body: Any = json.loads(text)
     except json.JSONDecodeError as exc:
@@ -66,7 +76,7 @@ def _unwrap_envelope(response: httpx.Response) -> Tuple[Any, int]:
     code = str(body.get("code", "") or "")
     message = str(body.get("message", "") or "")
     data = body.get("data")
-    if status == "success":
+    if status == "success" and response.is_success:
         return data, response.status_code
     if status == "error":
         raise_for_envelope_code(
@@ -121,6 +131,78 @@ def _timeout_error(exc: Exception, url: str) -> RequestTimeoutError:
     )
 
 
+def _identifier(value: str, field: str) -> str:
+    if not isinstance(value, str) or not re.fullmatch(
+        r"[A-Za-z0-9_-]{1,40}", value.strip()
+    ):
+        raise ValueError(f"{field} must be a non-empty platform ID")
+    return quote(value.strip(), safe="")
+
+
+def _seconds(value: float, field: str) -> float:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value <= 0
+    ):
+        raise ValueError(f"{field} must be a positive finite number")
+    return float(value)
+
+
+def _purchase_args(
+    plan_id: Optional[str], periods: int, key: str
+) -> Tuple[dict[str, Any], Dict[str, str]]:
+    if type(periods) is not int or not 1 <= periods <= 120:
+        raise ValueError("periods must be an integer from 1 to 120")
+    if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", key):
+        raise ValueError(
+            "idempotency_key must contain 1–128 letters, digits, dots, underscores, colons or hyphens"
+        )
+    body: dict[str, Any] = {"periods": periods}
+    if plan_id is not None:
+        body["plan_id"] = _identifier(plan_id, "plan_id")
+    return body, {"Idempotency-Key": key}
+
+
+def _match_id(actual: str, expected: str) -> None:
+    if actual != expected:
+        raise ProtocolError(
+            "response ID does not match the request", code="INVALID_PAYLOAD"
+        )
+
+
+def _png(response: httpx.Response) -> bytes:
+    content_type = (
+        response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+    )
+    if not response.is_success or content_type == "application/json":
+        _unwrap_envelope(response)
+        raise ProtocolError(
+            "unexpected image response",
+            code="INVALID_PAYLOAD",
+            http_status=response.status_code,
+        )
+    if (
+        content_type != "image/png"
+        or not response.content.startswith(b"\x89PNG\r\n\x1a\n")
+        or len(response.content) <= 8
+    ):
+        raise ProtocolError(
+            "response is not a PNG image",
+            code="INVALID_PAYLOAD",
+            http_status=response.status_code,
+        )
+    return response.content
+
+
+def _link_timeout(session_id: str) -> RequestTimeoutError:
+    return RequestTimeoutError(
+        "linking did not finish before the timeout",
+        data={"link_session_id": session_id},
+    )
+
+
 class ShamCashAPI:
     """Async client."""
 
@@ -163,23 +245,46 @@ class ShamCashAPI:
             "Accept": "application/json",
         }
 
+    async def _send(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Optional[Params] = None,
+        json: Optional[dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        timeout: Optional[float] = None,
+    ) -> httpx.Response:
+        url = f"{self.base_url}/{path.lstrip('/')}"
+        client = await self._get_client()
+        options: dict[str, Any] = {
+            "headers": {**self._headers(), **(headers or {})},
+            "params": params,
+        }
+        if json is not None:
+            options["json"] = json
+        if timeout is not None:
+            options["timeout"] = _seconds(timeout, "timeout")
+        try:
+            return await client.request(method, url, **options)
+        except httpx.TimeoutException as exc:
+            raise _timeout_error(exc, url) from exc
+        except httpx.RequestError as exc:
+            raise _request_error(exc, url) from exc
+
     async def fetch_json_envelope(
         self,
         method: str,
         path: str,
         *,
         params: Optional[Params] = None,
+        json: Optional[dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> dict[str, Any]:
-        """Return the raw JSON envelope."""
-        url = f"{self.base_url}/{path.lstrip('/')}"
-        client = await self._get_client()
-        try:
-            response = await client.request(method, url, headers=self._headers(), params=params)
-        except httpx.TimeoutException as exc:
-            raise _timeout_error(exc, url) from exc
-        except httpx.RequestError as exc:
-            raise _request_error(exc, url) from exc
-        return _parse_json_envelope(response)
+        """Return the raw JSON envelope, including API error envelopes."""
+        return _parse_json_envelope(
+            await self._send(method, path, params=params, json=json, headers=headers)
+        )
 
     async def _request(
         self,
@@ -187,30 +292,36 @@ class ShamCashAPI:
         path: str,
         *,
         params: Optional[Params] = None,
+        json: Optional[dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        timeout: Optional[float] = None,
     ) -> Tuple[Any, int]:
-        url = f"{self.base_url}/{path.lstrip('/')}"
-        client = await self._get_client()
-        try:
-            response = await client.request(method, url, headers=self._headers(), params=params)
-        except httpx.TimeoutException as exc:
-            raise _timeout_error(exc, url) from exc
-        except httpx.RequestError as exc:
-            raise _request_error(exc, url) from exc
-        return _unwrap_envelope(response)
+        return _unwrap_envelope(
+            await self._send(
+                method, path, params=params, json=json, headers=headers, timeout=timeout
+            )
+        )
 
     async def list_accounts(self) -> List[Account]:
         """Return linked accounts."""
         data, http_status = await self._request("GET", "/accounts")
-        return [Account.from_dict(_expect_object(item, "account", http_status)) for item in _expect_array(data, "accounts", http_status)]
+        return [
+            Account.from_dict(_expect_object(item, "account", http_status))
+            for item in _expect_array(data, "accounts", http_status)
+        ]
 
     async def get_account(self, account_id: str) -> Account:
         """Return one linked account."""
-        data, http_status = await self._request("GET", "/accounts", params=_params_with_optional_account(account_id))
+        data, http_status = await self._request(
+            "GET", "/accounts", params=_params_with_optional_account(account_id)
+        )
         return Account.from_dict(_expect_object(data, "account", http_status))
 
     async def get_balances(self, account_id: Optional[str] = None) -> BalancesResult:
         """Return account balances."""
-        data, http_status = await self._request("GET", "/balances", params=_params_with_optional_account(account_id))
+        data, http_status = await self._request(
+            "GET", "/balances", params=_params_with_optional_account(account_id)
+        )
         return BalancesResult.from_dict(_expect_object(data, "balances", http_status))
 
     async def list_transactions(
@@ -236,7 +347,9 @@ class ShamCashAPI:
         if limit is not None:
             params["limit"] = int(limit)
         data, http_status = await self._request("GET", "/transactions", params=params)
-        return TransactionsResult.from_dict(_expect_object(data, "transactions", http_status))
+        return TransactionsResult.from_dict(
+            _expect_object(data, "transactions", http_status)
+        )
 
     async def get_transaction(
         self,
@@ -255,6 +368,137 @@ class ShamCashAPI:
             limit=1,
         )
         return result.transactions[0] if result.transactions else None
+
+    async def create_link_session(
+        self, *, target_account_id: Optional[str] = None
+    ) -> LinkSession:
+        """Create a login QR session, or re-link an existing account."""
+        body = (
+            {"target_account_id": _identifier(target_account_id, "target_account_id")}
+            if target_account_id is not None
+            else None
+        )
+        data, status = await self._request("POST", "/link-sessions", json=body)
+        return LinkSession.from_dict(_expect_object(data, "link session", status))
+
+    async def get_link_session(
+        self, link_session_id: str, *, timeout: float = 120.0
+    ) -> LinkSession:
+        """Poll once. Expired and failed sessions raise their API exceptions."""
+        session_id = _identifier(link_session_id, "link_session_id")
+        data, status = await self._request(
+            "GET", f"/link-sessions/{session_id}", timeout=_seconds(timeout, "timeout")
+        )
+        result = LinkSession.from_dict(_expect_object(data, "link session", status))
+        _match_id(result.link_session_id, session_id)
+        return result
+
+    async def get_link_qr(self, link_session_id: str) -> bytes:
+        """Download the pending session's login QR as PNG bytes."""
+        session_id = _identifier(link_session_id, "link_session_id")
+        return _png(
+            await self._send(
+                "GET",
+                f"/link-sessions/{session_id}/qr",
+                headers={"Accept": "image/png"},
+            )
+        )
+
+    async def wait_for_link(
+        self,
+        link_session_id: str,
+        *,
+        timeout: float = 780.0,
+        poll_interval: float = 3.0,
+    ) -> LinkSession:
+        """Wait for linking while respecting the server's polling interval."""
+        session_id = _identifier(link_session_id, "link_session_id")
+        deadline = time.monotonic() + _seconds(timeout, "timeout")
+        interval = _seconds(poll_interval, "poll_interval")
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise _link_timeout(session_id)
+            result = await self.get_link_session(
+                session_id, timeout=min(120.0, remaining)
+            )
+            if result.state == "success":
+                return result
+            if result.state in {"expired", "failed"}:
+                raise_for_envelope_code(
+                    "LINK_EXPIRED" if result.state == "expired" else "LINK_FAILED",
+                    data={"link_session_id": session_id, "state": result.state},
+                )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise _link_timeout(session_id)
+            await asyncio.sleep(
+                min(max(interval, result.poll_after_seconds or 0), remaining)
+            )
+
+    async def list_plans(self) -> List[Plan]:
+        """Return available plans at this token owner's discounted prices."""
+        data, status = await self._request("GET", "/plans")
+        data = _expect_object(data, "plans", status)
+        return [
+            Plan.from_dict(_expect_object(item, "plan", status))
+            for item in _expect_array(data.get("plans"), "plans", status)
+        ]
+
+    async def subscribe(
+        self,
+        account_id: str,
+        *,
+        idempotency_key: str,
+        plan_id: Optional[str] = None,
+        periods: int = 1,
+    ) -> SubscriptionReceipt:
+        """Buy prepaid access. Reuse the purchase key only for the same purchase."""
+        account = _identifier(account_id, "account_id")
+        body, headers = _purchase_args(plan_id, periods, idempotency_key)
+        data, status = await self._request(
+            "POST", f"/accounts/{account}/subscription", json=body, headers=headers
+        )
+        result = SubscriptionReceipt.from_dict(
+            _expect_object(data, "subscription receipt", status)
+        )
+        _match_id(result.account_id, account)
+        return result
+
+    async def set_auto_renew(
+        self, account_id: str, enabled: bool
+    ) -> SubscriptionSettings:
+        """Enable or disable renewal without changing prepaid expiry."""
+        account = _identifier(account_id, "account_id")
+        if not isinstance(enabled, bool):
+            raise ValueError("enabled must be a boolean")
+        data, status = await self._request(
+            "PATCH", f"/accounts/{account}/subscription", json={"auto_renew": enabled}
+        )
+        result = SubscriptionSettings.from_dict(
+            _expect_object(data, "subscription settings", status)
+        )
+        _match_id(result.account_id, account)
+        return result
+
+    async def start_trial(self, account_id: str) -> Account:
+        """Activate the account's one-time free trial."""
+        account = _identifier(account_id, "account_id")
+        data, status = await self._request("POST", f"/accounts/{account}/trial")
+        data = _expect_object(data, "trial", status)
+        result = Account.from_dict(
+            _expect_object(data.get("account"), "account", status)
+        )
+        _match_id(result.id, account)
+        return result
+
+    async def delete_account(self, account_id: str) -> str:
+        """Unlink the platform account and return its deleted ID."""
+        account = _identifier(account_id, "account_id")
+        data, status = await self._request("DELETE", f"/accounts/{account}")
+        data = _expect_object(data, "deleted account", status)
+        _match_id(data.get("account_id"), account)
+        return account
 
 
 class ShamCashAPISync:
@@ -296,23 +540,46 @@ class ShamCashAPISync:
             "Accept": "application/json",
         }
 
+    def _send(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Optional[Params] = None,
+        json: Optional[dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        timeout: Optional[float] = None,
+    ) -> httpx.Response:
+        url = f"{self.base_url}/{path.lstrip('/')}"
+        client = self._get_client()
+        options: dict[str, Any] = {
+            "headers": {**self._headers(), **(headers or {})},
+            "params": params,
+        }
+        if json is not None:
+            options["json"] = json
+        if timeout is not None:
+            options["timeout"] = _seconds(timeout, "timeout")
+        try:
+            return client.request(method, url, **options)
+        except httpx.TimeoutException as exc:
+            raise _timeout_error(exc, url) from exc
+        except httpx.RequestError as exc:
+            raise _request_error(exc, url) from exc
+
     def fetch_json_envelope(
         self,
         method: str,
         path: str,
         *,
         params: Optional[Params] = None,
+        json: Optional[dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> dict[str, Any]:
-        """Return the raw JSON envelope."""
-        url = f"{self.base_url}/{path.lstrip('/')}"
-        client = self._get_client()
-        try:
-            response = client.request(method, url, headers=self._headers(), params=params)
-        except httpx.TimeoutException as exc:
-            raise _timeout_error(exc, url) from exc
-        except httpx.RequestError as exc:
-            raise _request_error(exc, url) from exc
-        return _parse_json_envelope(response)
+        """Return the raw JSON envelope, including API error envelopes."""
+        return _parse_json_envelope(
+            self._send(method, path, params=params, json=json, headers=headers)
+        )
 
     def _request(
         self,
@@ -320,30 +587,36 @@ class ShamCashAPISync:
         path: str,
         *,
         params: Optional[Params] = None,
+        json: Optional[dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        timeout: Optional[float] = None,
     ) -> Tuple[Any, int]:
-        url = f"{self.base_url}/{path.lstrip('/')}"
-        client = self._get_client()
-        try:
-            response = client.request(method, url, headers=self._headers(), params=params)
-        except httpx.TimeoutException as exc:
-            raise _timeout_error(exc, url) from exc
-        except httpx.RequestError as exc:
-            raise _request_error(exc, url) from exc
-        return _unwrap_envelope(response)
+        return _unwrap_envelope(
+            self._send(
+                method, path, params=params, json=json, headers=headers, timeout=timeout
+            )
+        )
 
     def list_accounts(self) -> List[Account]:
         """Return linked accounts."""
         data, http_status = self._request("GET", "/accounts")
-        return [Account.from_dict(_expect_object(item, "account", http_status)) for item in _expect_array(data, "accounts", http_status)]
+        return [
+            Account.from_dict(_expect_object(item, "account", http_status))
+            for item in _expect_array(data, "accounts", http_status)
+        ]
 
     def get_account(self, account_id: str) -> Account:
         """Return one linked account."""
-        data, http_status = self._request("GET", "/accounts", params=_params_with_optional_account(account_id))
+        data, http_status = self._request(
+            "GET", "/accounts", params=_params_with_optional_account(account_id)
+        )
         return Account.from_dict(_expect_object(data, "account", http_status))
 
     def get_balances(self, account_id: Optional[str] = None) -> BalancesResult:
         """Return account balances."""
-        data, http_status = self._request("GET", "/balances", params=_params_with_optional_account(account_id))
+        data, http_status = self._request(
+            "GET", "/balances", params=_params_with_optional_account(account_id)
+        )
         return BalancesResult.from_dict(_expect_object(data, "balances", http_status))
 
     def list_transactions(
@@ -369,7 +642,9 @@ class ShamCashAPISync:
         if limit is not None:
             params["limit"] = int(limit)
         data, http_status = self._request("GET", "/transactions", params=params)
-        return TransactionsResult.from_dict(_expect_object(data, "transactions", http_status))
+        return TransactionsResult.from_dict(
+            _expect_object(data, "transactions", http_status)
+        )
 
     def get_transaction(
         self,
@@ -388,3 +663,128 @@ class ShamCashAPISync:
             limit=1,
         )
         return result.transactions[0] if result.transactions else None
+
+    def create_link_session(
+        self, *, target_account_id: Optional[str] = None
+    ) -> LinkSession:
+        """Create a login QR session, or re-link an existing account."""
+        body = (
+            {"target_account_id": _identifier(target_account_id, "target_account_id")}
+            if target_account_id is not None
+            else None
+        )
+        data, status = self._request("POST", "/link-sessions", json=body)
+        return LinkSession.from_dict(_expect_object(data, "link session", status))
+
+    def get_link_session(
+        self, link_session_id: str, *, timeout: float = 120.0
+    ) -> LinkSession:
+        """Poll once. Expired and failed sessions raise their API exceptions."""
+        session_id = _identifier(link_session_id, "link_session_id")
+        data, status = self._request(
+            "GET", f"/link-sessions/{session_id}", timeout=_seconds(timeout, "timeout")
+        )
+        result = LinkSession.from_dict(_expect_object(data, "link session", status))
+        _match_id(result.link_session_id, session_id)
+        return result
+
+    def get_link_qr(self, link_session_id: str) -> bytes:
+        """Download the pending session's login QR as PNG bytes."""
+        session_id = _identifier(link_session_id, "link_session_id")
+        return _png(
+            self._send(
+                "GET",
+                f"/link-sessions/{session_id}/qr",
+                headers={"Accept": "image/png"},
+            )
+        )
+
+    def wait_for_link(
+        self,
+        link_session_id: str,
+        *,
+        timeout: float = 780.0,
+        poll_interval: float = 3.0,
+    ) -> LinkSession:
+        """Wait for linking while respecting the server's polling interval."""
+        session_id = _identifier(link_session_id, "link_session_id")
+        deadline = time.monotonic() + _seconds(timeout, "timeout")
+        interval = _seconds(poll_interval, "poll_interval")
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise _link_timeout(session_id)
+            result = self.get_link_session(session_id, timeout=min(120.0, remaining))
+            if result.state == "success":
+                return result
+            if result.state in {"expired", "failed"}:
+                raise_for_envelope_code(
+                    "LINK_EXPIRED" if result.state == "expired" else "LINK_FAILED",
+                    data={"link_session_id": session_id, "state": result.state},
+                )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise _link_timeout(session_id)
+            time.sleep(min(max(interval, result.poll_after_seconds or 0), remaining))
+
+    def list_plans(self) -> List[Plan]:
+        """Return available plans at this token owner's discounted prices."""
+        data, status = self._request("GET", "/plans")
+        data = _expect_object(data, "plans", status)
+        return [
+            Plan.from_dict(_expect_object(item, "plan", status))
+            for item in _expect_array(data.get("plans"), "plans", status)
+        ]
+
+    def subscribe(
+        self,
+        account_id: str,
+        *,
+        idempotency_key: str,
+        plan_id: Optional[str] = None,
+        periods: int = 1,
+    ) -> SubscriptionReceipt:
+        """Buy prepaid access. Reuse the purchase key only for the same purchase."""
+        account = _identifier(account_id, "account_id")
+        body, headers = _purchase_args(plan_id, periods, idempotency_key)
+        data, status = self._request(
+            "POST", f"/accounts/{account}/subscription", json=body, headers=headers
+        )
+        result = SubscriptionReceipt.from_dict(
+            _expect_object(data, "subscription receipt", status)
+        )
+        _match_id(result.account_id, account)
+        return result
+
+    def set_auto_renew(self, account_id: str, enabled: bool) -> SubscriptionSettings:
+        """Enable or disable renewal without changing prepaid expiry."""
+        account = _identifier(account_id, "account_id")
+        if not isinstance(enabled, bool):
+            raise ValueError("enabled must be a boolean")
+        data, status = self._request(
+            "PATCH", f"/accounts/{account}/subscription", json={"auto_renew": enabled}
+        )
+        result = SubscriptionSettings.from_dict(
+            _expect_object(data, "subscription settings", status)
+        )
+        _match_id(result.account_id, account)
+        return result
+
+    def start_trial(self, account_id: str) -> Account:
+        """Activate the account's one-time free trial."""
+        account = _identifier(account_id, "account_id")
+        data, status = self._request("POST", f"/accounts/{account}/trial")
+        data = _expect_object(data, "trial", status)
+        result = Account.from_dict(
+            _expect_object(data.get("account"), "account", status)
+        )
+        _match_id(result.id, account)
+        return result
+
+    def delete_account(self, account_id: str) -> str:
+        """Unlink the platform account and return its deleted ID."""
+        account = _identifier(account_id, "account_id")
+        data, status = self._request("DELETE", f"/accounts/{account}")
+        data = _expect_object(data, "deleted account", status)
+        _match_id(data.get("account_id"), account)
+        return account

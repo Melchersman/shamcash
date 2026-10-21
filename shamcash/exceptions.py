@@ -109,7 +109,67 @@ class ProtocolError(ShamCashAPIError):
     """Invalid JSON or payload shape."""
 
 
+class APIManagementDisabledError(ForbiddenError):
+    """`API_MANAGEMENT_DISABLED`."""
+
+
+class LinkExpiredError(ShamCashAPIError):
+    """`LINK_EXPIRED`."""
+
+
+class LinkFailedError(ShamCashAPIError):
+    """`LINK_FAILED`."""
+
+
+class LinkQRUnavailableError(ShamCashAPIError):
+    """`LINK_QR_UNAVAILABLE`."""
+
+
+class PlanNotFoundError(NotFoundError):
+    """`PLAN_NOT_FOUND`."""
+
+
+class InsufficientBalanceError(ShamCashAPIError):
+    """`INSUFFICIENT_BALANCE`."""
+
+
+class TrialAlreadyUsedError(ShamCashAPIError):
+    """`TRIAL_ALREADY_USED`."""
+
+
+class SubscriptionAlreadyActiveError(ShamCashAPIError):
+    """`SUBSCRIPTION_ALREADY_ACTIVE`."""
+
+
+class IdempotencyKeyRequiredError(ValidationError):
+    """`IDEMPOTENCY_KEY_REQUIRED`."""
+
+
+class IdempotencyKeyReusedError(ShamCashAPIError):
+    """`IDEMPOTENCY_KEY_REUSED`."""
+
+
+class ShamCashSessionExpiredError(ShamCashAPIError):
+    """`SHAMCASH_SESSION_EXPIRED`."""
+
+
+class UpstreamUnavailableError(FetchFailedError):
+    """`UPSTREAM_UNAVAILABLE`."""
+
+
 ERROR_MAP: dict[str, Type[ShamCashAPIError]] = {
+    "API_MANAGEMENT_DISABLED": APIManagementDisabledError,
+    "LINK_EXPIRED": LinkExpiredError,
+    "LINK_FAILED": LinkFailedError,
+    "LINK_QR_UNAVAILABLE": LinkQRUnavailableError,
+    "PLAN_NOT_FOUND": PlanNotFoundError,
+    "INSUFFICIENT_BALANCE": InsufficientBalanceError,
+    "TRIAL_ALREADY_USED": TrialAlreadyUsedError,
+    "SUBSCRIPTION_ALREADY_ACTIVE": SubscriptionAlreadyActiveError,
+    "IDEMPOTENCY_KEY_REQUIRED": IdempotencyKeyRequiredError,
+    "IDEMPOTENCY_KEY_REUSED": IdempotencyKeyReusedError,
+    "SHAMCASH_SESSION_EXPIRED": ShamCashSessionExpiredError,
+    "UPSTREAM_UNAVAILABLE": UpstreamUnavailableError,
     "VALIDATION_ERROR": ValidationError,
     "AUTH_MISSING": AuthMissingError,
     "AUTH_INVALID": AuthInvalidError,

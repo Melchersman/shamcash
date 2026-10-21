@@ -2,22 +2,35 @@
 
 from .client import ShamCashAPI, ShamCashAPISync
 from .exceptions import (
+    APIManagementDisabledError,
     AccountNotFoundError,
     AuthInvalidError,
     AuthMissingError,
     FetchFailedError,
     ForbiddenError,
+    IdempotencyKeyRequiredError,
+    IdempotencyKeyReusedError,
+    InsufficientBalanceError,
     InternalError,
+    LinkExpiredError,
+    LinkFailedError,
+    LinkQRUnavailableError,
     NetworkError,
     NotFoundError,
+    PlanNotFoundError,
     ProtocolError,
     RateLimitExceededError,
     RequestTimeoutError,
     ShamCashAPIError,
+    ShamCashSessionExpiredError,
+    SubscriptionAlreadyActiveError,
     SubscriptionUnavailableError,
+    TrialAlreadyUsedError,
+    UpstreamUnavailableError,
     ValidationError,
     parse_retry_after_header,
 )
+from .lifecycle import LinkSession, Plan, SubscriptionReceipt, SubscriptionSettings
 from .models import (
     Account,
     BalanceRow,
@@ -28,9 +41,25 @@ from .models import (
 )
 from .qr import create_qr_code
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 __all__ = [
+    "LinkSession",
+    "Plan",
+    "SubscriptionReceipt",
+    "SubscriptionSettings",
+    "APIManagementDisabledError",
+    "LinkExpiredError",
+    "LinkFailedError",
+    "LinkQRUnavailableError",
+    "PlanNotFoundError",
+    "InsufficientBalanceError",
+    "TrialAlreadyUsedError",
+    "SubscriptionAlreadyActiveError",
+    "IdempotencyKeyRequiredError",
+    "IdempotencyKeyReusedError",
+    "ShamCashSessionExpiredError",
+    "UpstreamUnavailableError",
     "ShamCashAPI",
     "ShamCashAPISync",
     "Account",
