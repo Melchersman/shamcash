@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "shamcash"
-version = "1.3.0"
-description = "Python client for the ShamCash API"
+version = "1.3.1"
+description = "Sync and async Python SDK for shamcash-api.com: account linking, balances, incoming transfers and subscriptions"
 readme = "README.md"
 requires-python = ">=3.8"
 license = {file = "LICENSE"}
-authors = [{ name = "melchersman", email = "melchersman@gmail.com" }]
+authors = [{ name = "Melchersman", email = "api.shamcash@gmail.com" }]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -61,10 +61,14 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Melchersman/shamcash"
-Documentation = "https://shamcash-api.com"
+Homepage = "https://shamcash-api.com"
+Documentation = "https://shamcash-api.com/en/docs"
+"Python guide" = "https://shamcash-api.com/en/python"
+"دليل بايثون" = "https://shamcash-api.com/python"
+"Payment integration" = "https://shamcash-api.com/en/integration"
 Repository = "https://github.com/Melchersman/shamcash"
 Issues = "https://github.com/Melchersman/shamcash/issues"
+Changelog = "https://github.com/Melchersman/shamcash/releases"
 
 [tool.setuptools]
 packages = ["shamcash"]
