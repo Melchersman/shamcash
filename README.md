@@ -1,6 +1,14 @@
-# shamcash
+# ShamCash API Python SDK
 
 Python client for the [ShamCash API](https://shamcash-api.com), with sync and async clients for account linking, subscriptions, balances, and incoming transactions.
+
+This package is maintained for **shamcash-api.com**, an independent developer platform. It is not the official ShamCash app or a library published by the ShamCash wallet operator.
+
+[Platform](https://shamcash-api.com) · [API documentation](https://shamcash-api.com/en/docs) · [Python quick start](https://shamcash-api.com/en/python) · [PyPI package](https://pypi.org/project/shamcash/) · [Payment integration](https://shamcash-api.com/en/integration)
+
+مكتبة بايثون لمنصة شام كاش البرمجية المستقلة، لربط الحسابات وقراءة الأرصدة والحوالات الواردة وإدارة الاشتراكات.
+
+[دليل بايثون بالعربية](https://shamcash-api.com/python) · [الوثائق البرمجية بالعربية](https://shamcash-api.com/ar/docs) · [دليل ربط المدفوعات](https://shamcash-api.com/integration)
 
 ```bash
 pip install shamcash
