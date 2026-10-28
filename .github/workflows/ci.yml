@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: ["master", "main", "codex/sdk-lifecycle-*"]
+    branches: ["master", "main", "feature/sdk-lifecycle-*"]
   pull_request:
     branches: ["master", "main"]
   workflow_call:

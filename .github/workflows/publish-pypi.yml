@@ -16,6 +16,7 @@ concurrency:
 
 jobs:
   version:
+    if: github.event_name != 'push' || github.event.forced != true
     name: Check release version
     runs-on: ubuntu-latest
     outputs:
